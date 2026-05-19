@@ -24,35 +24,35 @@ namespace VCX::Labs::Fluid {
         float m_fRatio = 0.95f; // FLIP ratio: 0=PIC, 1=FLIP, 0.95=FLIP95
 
         // ==================== 网格几何参数 ====================
-        int   m_iCellX;       // 网格点数 (res+1)
+        int   m_iCellX; // 网格点数 (res+1)
         int   m_iCellY;
         int   m_iCellZ;
-        float m_h;            // 网格间距 = 1.0 / res
-        float m_fInvSpacing;  // 网格间距的倒数 = res
-        int   m_iNumCells;    // 总网格点数 = m_iCellX * m_iCellY * m_iCellZ
+        float m_h;           // 网格间距 = 1.0 / res
+        float m_fInvSpacing; // 网格间距的倒数 = res
+        int   m_iNumCells;   // 总网格点数 = m_iCellX * m_iCellY * m_iCellZ
 
-        int   m_iNumSpheres;     // 粒子总数
-        float m_particleRadius;  // 粒子半径 (约为 0.3*h)
+        int   m_iNumSpheres;    // 粒子总数
+        float m_particleRadius; // 粒子半径 (约为 0.3*h)
 
         // ==================== 交错网格速度 (MAC Grid) ====================
         // 网格点 (i,j,k) 存储三个速度面分量:
         //   m_vel[idx].x = u(i, j+1/2, k+1/2) — x方向速度面
         //   m_vel[idx].y = v(i+1/2, j, k+1/2) — y方向速度面
         //   m_vel[idx].z = w(i+1/2, j+1/2, k) — z方向速度面
-        std::vector<glm::vec3> m_vel;      // 当前网格速度
-        std::vector<glm::vec3> m_pre_vel;  // 压力求解前的网格速度 (用于FLIP增量计算)
+        std::vector<glm::vec3> m_vel;         // 当前网格速度
+        std::vector<glm::vec3> m_pre_vel;     // 压力求解前的网格速度 (用于FLIP增量计算)
         std::vector<float>     m_near_num[3]; // 每个速度面的权重累积和 (用于P2G归一化)
 
         // ==================== 空间哈希表 ====================
         std::vector<int>        m_hashtable;      // 按格点排序的粒子索引列表
-        std::vector<int>        m_hashtableindex;  // 每个格点的前缀和, 大小 m_iNumCells+1
+        std::vector<int>        m_hashtableindex; // 每个格点的前缀和, 大小 m_iNumCells+1
         std::vector<glm::ivec3> m_particleSlot;   // 每个粒子所在的格点索引
 
         // ==================== 压力与单元格状态 ====================
-        std::vector<float> m_p;               // 压力 (用于可视化)
-        std::vector<float> m_s;               // 固体分数: 0.0=固体, 1.0=非固体
-        std::vector<int>   m_type;            // 单元格类型 (EMPTY/FLUID/SOLID)
-        std::vector<float> m_particleDensity; // 每个格点的核密度估计
+        std::vector<float> m_p;                          // 压力 (用于可视化)
+        std::vector<float> m_s;                          // 固体分数: 0.0=固体, 1.0=非固体
+        std::vector<int>   m_type;                       // 单元格类型 (EMPTY/FLUID/SOLID)
+        std::vector<float> m_particleDensity;            // 每个格点的核密度估计
         float              m_particleRestDensity = 1.0f; // 静止密度 (初始化时估算)
 
         glm::vec3 gravity { 0, -9.81f, 0 };
@@ -103,9 +103,9 @@ namespace VCX::Labs::Fluid {
             std::fill(m_hashtableindex.begin(), m_hashtableindex.end(), 0);
             // 1. 统计每个格点中的粒子数
             for (int p = 0; p < m_iNumSpheres; ++p) {
-                glm::ivec3 slot         = worldToSlot(m_particlePos[p]);
-                m_particleSlot[p]       = slot;
-                int const  id           = index2GridOffset(slot);
+                glm::ivec3 slot   = worldToSlot(m_particlePos[p]);
+                m_particleSlot[p] = slot;
+                int const id      = index2GridOffset(slot);
                 ++m_hashtableindex[id + 1];
             }
             // 2. 前缀和 → 每个格点在哈希表中的起止范围
@@ -114,7 +114,7 @@ namespace VCX::Labs::Fluid {
             // 3. 散射粒子到哈希表
             std::vector<int> writeCursor = m_hashtableindex;
             for (int p = 0; p < m_iNumSpheres; ++p) {
-                int const id                  = index2GridOffset(m_particleSlot[p]);
+                int const id                   = index2GridOffset(m_particleSlot[p]);
                 m_hashtable[writeCursor[id]++] = p;
             }
         }
@@ -155,9 +155,9 @@ namespace VCX::Labs::Fluid {
 
             for (int i = 0; i < m_iNumSpheres; i++) {
                 // —— 障碍球碰撞 ——
-                glm::vec3 diff  = m_particlePos[i] - obstaclePos;
-                float     dist  = glm::length(diff);
-                float     minD  = obstacleRadius + m_particleRadius;
+                glm::vec3 diff = m_particlePos[i] - obstaclePos;
+                float     dist = glm::length(diff);
+                float     minD = obstacleRadius + m_particleRadius;
                 if (dist < minD && dist > 1e-8f) {
                     glm::vec3 const n = diff / dist;
                     // 将粒子推到障碍球表面外侧
@@ -212,11 +212,12 @@ namespace VCX::Labs::Fluid {
                         for (int dj = -1; dj <= 1; dj++) {
                             int nj = clampSlot(slot.y + dj, m_iCellY - 1);
                             for (int dk = -1; dk <= 1; dk++) {
-                                int nk       = clampSlot(slot.z + dk, m_iCellZ - 1);
+                                int nk         = clampSlot(slot.z + dk, m_iCellZ - 1);
                                 int neighborId = index2GridOffset(glm::ivec3(ni, nj, nk));
 
                                 for (int idx = m_hashtableindex[neighborId];
-                                     idx < m_hashtableindex[neighborId + 1]; idx++) {
+                                     idx < m_hashtableindex[neighborId + 1];
+                                     idx++) {
                                     int j = m_hashtable[idx];
                                     if (i >= j) continue; // 每对只处理一次
 
@@ -246,7 +247,7 @@ namespace VCX::Labs::Fluid {
                 std::fill(m_vel.begin(), m_vel.end(), glm::vec3(0.0f));
                 for (int d = 0; d < 3; ++d)
                     std::fill(m_near_num[d].begin(), m_near_num[d].end(), 0.0f);
-                    
+
                 buildHash();
 
                 // 辅助lambda: 在采样点samlePos处, 搜索邻域粒子并累积dir方向速度
@@ -266,7 +267,8 @@ namespace VCX::Labs::Fluid {
                             for (int kk = k0; kk <= k1; ++kk) {
                                 int const neighborId = index2GridOffset(glm::ivec3(ii, jj, kk));
                                 for (int ptr = m_hashtableindex[neighborId];
-                                     ptr < m_hashtableindex[neighborId + 1]; ++ptr) {
+                                     ptr < m_hashtableindex[neighborId + 1];
+                                     ++ptr) {
                                     int   p = m_hashtable[ptr];
                                     float w = weight(samplePos, m_particlePos[p]);
                                     if (w <= 0.0f) continue;
@@ -282,7 +284,7 @@ namespace VCX::Labs::Fluid {
                 for (int i = 0; i < m_iCellX; ++i) {
                     for (int j = 0; j < m_iCellY - 1; ++j) {
                         for (int k = 0; k < m_iCellZ - 1; ++k) {
-                            if (!isValidVelocity(i, j, k, 0)) continue;
+                            if (! isValidVelocity(i, j, k, 0)) continue;
                             // x-速度面的物理位置
                             glm::vec3 samplePos = glm::vec3(i, j + 0.5f, k + 0.5f) * m_h + glm::vec3(-0.5f);
                             accumulateDir(0, samplePos, glm::ivec3(i, j, k));
@@ -294,7 +296,7 @@ namespace VCX::Labs::Fluid {
                 for (int i = 0; i < m_iCellX - 1; ++i) {
                     for (int j = 0; j < m_iCellY; ++j) {
                         for (int k = 0; k < m_iCellZ - 1; ++k) {
-                            if (!isValidVelocity(i, j, k, 1)) continue;
+                            if (! isValidVelocity(i, j, k, 1)) continue;
                             glm::vec3 samplePos = glm::vec3(i + 0.5f, j, k + 0.5f) * m_h + glm::vec3(-0.5f);
                             accumulateDir(1, samplePos, glm::ivec3(i, j, k));
                         }
@@ -305,7 +307,7 @@ namespace VCX::Labs::Fluid {
                 for (int i = 0; i < m_iCellX - 1; ++i) {
                     for (int j = 0; j < m_iCellY - 1; ++j) {
                         for (int k = 0; k < m_iCellZ; ++k) {
-                            if (!isValidVelocity(i, j, k, 2)) continue;
+                            if (! isValidVelocity(i, j, k, 2)) continue;
                             glm::vec3 samplePos = glm::vec3(i + 0.5f, j + 0.5f, k) * m_h + glm::vec3(-0.5f);
                             accumulateDir(2, samplePos, glm::ivec3(i, j, k));
                         }
@@ -318,7 +320,7 @@ namespace VCX::Labs::Fluid {
                     if (m_near_num[1][id] > 1e-6f) m_vel[id].y /= m_near_num[1][id];
                     if (m_near_num[2][id] > 1e-6f) m_vel[id].z /= m_near_num[2][id];
                 }
-                
+
                 m_pre_vel = m_vel;
             } else {
                 // ============ G2P: 网格 → 粒子 ============
@@ -336,12 +338,12 @@ namespace VCX::Labs::Fluid {
                     gridPos.y = std::max(0.0f, std::min(gridPos.y, float(m_iCellY - 1) - 1e-4f));
                     gridPos.z = std::max(0.0f, std::min(gridPos.z, float(m_iCellZ - 1) - 1e-4f));
 
-                    int   i0  = static_cast<int>(std::floor(gridPos.x));
-                    int   j0  = static_cast<int>(std::floor(gridPos.y));
-                    int   k0  = static_cast<int>(std::floor(gridPos.z));
-                    float fx  = gridPos.x - i0;
-                    float fy  = gridPos.y - j0;
-                    float fz  = gridPos.z - k0;
+                    int   i0 = static_cast<int>(std::floor(gridPos.x));
+                    int   j0 = static_cast<int>(std::floor(gridPos.y));
+                    int   k0 = static_cast<int>(std::floor(gridPos.z));
+                    float fx = gridPos.x - i0;
+                    float fy = gridPos.y - j0;
+                    float fz = gridPos.z - k0;
 
                     float accum = 0.0f;
                     float wsum  = 0.0f;
@@ -352,7 +354,7 @@ namespace VCX::Labs::Fluid {
                             for (int dk = 0; dk <= 1; ++dk) {
                                 float      wz = dk ? fz : (1.0f - fz);
                                 glm::ivec3 idx(i0 + di, j0 + dj, k0 + dk);
-                                if (!isValidVelocity(idx.x, idx.y, idx.z, dir)) continue;
+                                if (! isValidVelocity(idx.x, idx.y, idx.z, dir)) continue;
                                 int   id  = index2GridOffset(idx);
                                 float w   = wx * wy * wz;
                                 float val = useFlipDelta ? (m_vel[id][dir] - m_pre_vel[id][dir])
@@ -372,9 +374,9 @@ namespace VCX::Labs::Fluid {
                     // x-速度面 u 位于 (i, j+1/2, k+1/2) → 偏移 (0, -0.5h, -0.5h)
                     // y-速度面 v 位于 (i+1/2, j, k+1/2) → 偏移 (-0.5h, 0, -0.5h)
                     // z-速度面 w 位于 (i+1/2, j+1/2, k) → 偏移 (-0.5h, -0.5h, 0)
-                    glm::vec3 const px = m_particlePos[i] + glm::vec3( 0.0f, -0.5f, -0.5f) * m_h;
-                    glm::vec3 const py = m_particlePos[i] + glm::vec3(-0.5f,  0.0f, -0.5f) * m_h;
-                    glm::vec3 const pz = m_particlePos[i] + glm::vec3(-0.5f, -0.5f,  0.0f) * m_h;
+                    glm::vec3 const px = m_particlePos[i] + glm::vec3(0.0f, -0.5f, -0.5f) * m_h;
+                    glm::vec3 const py = m_particlePos[i] + glm::vec3(-0.5f, 0.0f, -0.5f) * m_h;
+                    glm::vec3 const pz = m_particlePos[i] + glm::vec3(-0.5f, -0.5f, 0.0f) * m_h;
 
                     // PIC: 直接从网格插值得到新速度 (耗散但稳定)
                     glm::vec3 pic_vel;
@@ -401,8 +403,8 @@ namespace VCX::Labs::Fluid {
             for (int i = 0; i < m_iCellX; ++i) {
                 for (int j = 0; j < m_iCellY; ++j) {
                     for (int k = 0; k < m_iCellZ; ++k) {
-                        int const       id        = index2GridOffset(glm::ivec3(i, j, k));
-                        glm::vec3 const gridPos   = glm::vec3(i, j, k) * m_h + glm::vec3(-0.5f);
+                        int const       id         = index2GridOffset(glm::ivec3(i, j, k));
+                        glm::vec3 const gridPos    = glm::vec3(i, j, k) * m_h + glm::vec3(-0.5f);
                         glm::ivec3      centerSlot = worldToSlot(gridPos);
 
                         // 在3×3×3邻域格点中搜索粒子
@@ -419,7 +421,8 @@ namespace VCX::Labs::Fluid {
                                 for (int kk = k0; kk <= k1; ++kk) {
                                     int neighborId = index2GridOffset(glm::ivec3(ii, jj, kk));
                                     for (int ptr = m_hashtableindex[neighborId];
-                                         ptr < m_hashtableindex[neighborId + 1]; ++ptr) {
+                                         ptr < m_hashtableindex[neighborId + 1];
+                                         ++ptr) {
                                         int p = m_hashtable[ptr];
                                         density += weight(gridPos, m_particlePos[p]);
                                     }
@@ -523,9 +526,9 @@ namespace VCX::Labs::Fluid {
             // 颜色渐变: 低速/低压(蓝) → 中速/中压(青) → 高速/高压(红)
             auto const ramp = [](float t) {
                 t = glm::clamp(t, 0.0f, 1.0f);
-                glm::vec3 const cLow(0.10f, 0.25f, 0.95f);  // 蓝色 (低)
-                glm::vec3 const cMid(0.10f, 0.90f, 0.85f);  // 青色 (中)
-                glm::vec3 const cHi(1.00f, 0.30f, 0.05f);   // 红色 (高)
+                glm::vec3 const cLow(0.10f, 0.25f, 0.95f); // 蓝色 (低)
+                glm::vec3 const cMid(0.10f, 0.90f, 0.85f); // 青色 (中)
+                glm::vec3 const cHi(1.00f, 0.30f, 0.05f);  // 红色 (高)
                 if (t < 0.5f)
                     return glm::mix(cLow, cMid, t * 2.0f);
                 return glm::mix(cMid, cHi, (t - 0.5f) * 2.0f);
@@ -539,7 +542,7 @@ namespace VCX::Labs::Fluid {
 
             for (int i = 0; i < m_iNumSpheres; ++i) {
                 // 三线性插值获取粒子位置处的压力
-                glm::vec3 g = (m_particlePos[i] + glm::vec3(0.5f)) * m_fInvSpacing;
+                glm::vec3 g  = (m_particlePos[i] + glm::vec3(0.5f)) * m_fInvSpacing;
                 int       ix = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 2);
                 int       iy = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 2);
                 int       iz = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 2);
@@ -568,8 +571,8 @@ namespace VCX::Labs::Fluid {
                 float p1  = p01 * (1.0f - fy) + p11 * fy;
                 float p   = p0 * (1.0f - fz) + p1 * fz;
 
-                float t              = std::abs(p) / maxPressure;
-                m_particleColor[i]   = ramp(t);
+                float t            = std::abs(p) / maxPressure;
+                m_particleColor[i] = ramp(t);
             }
         }
 
@@ -582,7 +585,7 @@ namespace VCX::Labs::Fluid {
             float overRelaxation    = 1.9f;
             bool  compensateDrift   = false;
 
-            float     flipRatio      = m_fRatio;
+            float     flipRatio = m_fRatio;
             glm::vec3 obstaclePos(0.0f);
             glm::vec3 obstacleVel(0.0f);
 
@@ -618,14 +621,14 @@ namespace VCX::Labs::Fluid {
             int numZ = floor((relWater.z * tank.z - 2.0f * _h - 2.0f * point_r) / dz);
 
             // 更新网格几何参数
-            m_iNumSpheres    = numX * numY * numZ;
-            m_iCellX         = res + 1;
-            m_iCellY         = res + 1;
-            m_iCellZ         = res + 1;
-            m_h              = 1.0f / float(res);
-            m_fInvSpacing    = float(res);
-            m_iNumCells      = m_iCellX * m_iCellY * m_iCellZ;
-            m_particleRadius = point_r;
+            m_iNumSpheres         = numX * numY * numZ;
+            m_iCellX              = res + 1;
+            m_iCellY              = res + 1;
+            m_iCellZ              = res + 1;
+            m_h                   = 1.0f / float(res);
+            m_fInvSpacing         = float(res);
+            m_iNumCells           = m_iCellX * m_iCellY * m_iCellZ;
+            m_particleRadius      = point_r;
             m_particleRestDensity = 1.0f;
 
             // 分配粒子数组
@@ -667,9 +670,9 @@ namespace VCX::Labs::Fluid {
                 for (int j = 0; j < numY; j++) {
                     for (int k = 0; k < numZ; k++) {
                         m_particlePos[p++] = glm::vec3(
-                            m_h + point_r + dx * i + (j % 2 == 0 ? 0.0f : point_r),
-                            m_h + point_r + dy * j,
-                            m_h + point_r + dz * k + (j % 2 == 0 ? 0.0f : point_r))
+                                                 m_h + point_r + dx * i + (j % 2 == 0 ? 0.0f : point_r),
+                                                 m_h + point_r + dy * j,
+                                                 m_h + point_r + dz * k + (j % 2 == 0 ? 0.0f : point_r))
                             + glm::vec3(-0.5f);
                     }
                 }
@@ -683,8 +686,8 @@ namespace VCX::Labs::Fluid {
                     for (int k = 0; k < m_iCellZ; k++) {
                         float s = 1.0f; // 默认非固体
                         if (i == 0 || i >= m_iCellX - 2
-                         || j == 0 || j >= m_iCellY - 2
-                         || k == 0 || k >= m_iCellZ - 2)
+                            || j == 0 || j >= m_iCellY - 2
+                            || k == 0 || k >= m_iCellZ - 2)
                             s = 0.0f; // 边界固体
                         m_s[i * n + j * m + k] = s;
                     }
