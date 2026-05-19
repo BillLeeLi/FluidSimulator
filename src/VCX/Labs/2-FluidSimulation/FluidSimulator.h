@@ -243,11 +243,10 @@ namespace VCX::Labs::Fluid {
                 // ============ P2G: 粒子 → 网格 ============
 
                 // 保存当前网格速度用于FLIP增量
-                m_pre_vel = m_vel;
                 std::fill(m_vel.begin(), m_vel.end(), glm::vec3(0.0f));
                 for (int d = 0; d < 3; ++d)
                     std::fill(m_near_num[d].begin(), m_near_num[d].end(), 0.0f);
-
+                    
                 buildHash();
 
                 // 辅助lambda: 在采样点samlePos处, 搜索邻域粒子并累积dir方向速度
@@ -319,7 +318,8 @@ namespace VCX::Labs::Fluid {
                     if (m_near_num[1][id] > 1e-6f) m_vel[id].y /= m_near_num[1][id];
                     if (m_near_num[2][id] > 1e-6f) m_vel[id].z /= m_near_num[2][id];
                 }
-
+                
+                m_pre_vel = m_vel;
             } else {
                 // ============ G2P: 网格 → 粒子 ============
 

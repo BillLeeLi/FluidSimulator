@@ -50,6 +50,8 @@ namespace VCX::Labs::Fluid {
         if (ImGui::SliderInt("Resolution", &_res, 8, 32))
             ResetSystem();
 
+        (ImGui::SliderInt("Inv Time Step", &_invDeltaTime, 20, 240));
+
         ImGui::Text("Particles: %d", _simulation.m_iNumSpheres);
         ImGui::Text("Grid: %d x %d x %d", _simulation.m_iCellX, _simulation.m_iCellY, _simulation.m_iCellZ);
     }
@@ -61,7 +63,7 @@ namespace VCX::Labs::Fluid {
             _cameraManager.Save(_sceneObject.Camera);
         }
         if (! _stopped)
-            _simulation.SimulateTimestep(Engine::GetDeltaTime());
+            _simulation.SimulateTimestep(1.f / float(_invDeltaTime));
 
         _BoundaryItem.UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(vertex_pos));
         _frame.Resize(desiredSize);

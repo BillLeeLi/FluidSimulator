@@ -40,6 +40,7 @@ namespace VCX::Labs::Fluid {
         bool                          _useGammaCorrection { true };
         int                           _attenuationOrder { 2 };
         int                           _bumpMappingPercent { 20 };
+        int                           _invDeltaTime { 60 };
 
         Engine::GL::UniqueIndexedRenderItem _BoundaryItem;
         Common::OrbitCameraManager          _cameraManager;
