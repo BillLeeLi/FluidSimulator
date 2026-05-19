@@ -25,35 +25,35 @@ namespace VCX::Labs::Fluid {
 
     private:
         std::vector<Assets::ExampleScene> const _scenes;
-    
-        // 流体粒子渲染程序 (fluid.vert + fluid.frag)
-        Engine::GL::UniqueProgram             _program;
-        // 边界框线框程序 (flat.vert + flat.frag)
-        Engine::GL::UniqueProgram             _lineProgram;
-        Engine::GL::UniqueRenderFrame         _frame;
 
-        // 使用 SceneObject 来管理 PassConstants UBO (与lab0相同的方式)
-        Rendering::SceneObject                _sceneObject;
+        Engine::GL::UniqueProgram     _program;
+        Engine::GL::UniqueProgram     _lineprogram;
+        Engine::GL::UniqueRenderFrame _frame;
+        Rendering::SceneObject        _sceneObject;
+        std::size_t                   _sceneIdx { 0 };
+        bool                          _recompute { true };
+        bool                          _uniformDirty { true };
+        int                           _msaa { 2 };
+        int                           _useBlinn { 0 };
+        float                         _shininess { 32 };
+        float                         _ambientScale { 1 };
+        bool                          _useGammaCorrection { true };
+        int                           _attenuationOrder { 2 };
+        int                           _bumpMappingPercent { 20 };
 
-        // 水槽边界框
-        Engine::GL::UniqueIndexedRenderItem   _boundaryItem;
-        
-        // 相机控制
-        Common::OrbitCameraManager            _cameraManager;
-        
-        // 球体网格 (每个粒子绘制为一个小球)
-        Engine::Model                         _sphere;
-        
-        // 模拟参数
-        int   _res        = 16;
-        bool  _stopped    = false;
-        bool  _uniformDirty = true;
-        float _lineWidth  = 2.0f;
-        
-        // 流体模拟器
-        Simulator _simulation;
+        Engine::GL::UniqueIndexedRenderItem _BoundaryItem;
+        Common::OrbitCameraManager          _cameraManager;
+        float                               _BndWidth { 2.0f };
+        bool                                _stopped { false };
+        Engine::Model                       _sphere;
+        int                                 _res { 16 };
+        float                               _r;
+        int                                 numofSpheres;
+        Simulator                           _simulation;
 
-        void ResetSystem();
+        char const *          GetSceneName(std::size_t const i) const { return VCX::Labs::Rendering::Content::SceneNames[std::size_t(_scenes[i])].c_str(); }
+        Engine::Scene const & GetScene(std::size_t const i) const { return VCX::Labs::Rendering::Content::Scenes[std::size_t(_scenes[i])]; }
+        void                  ResetSystem();
     };
 
 } // namespace VCX::Labs::Fluid
