@@ -6,30 +6,41 @@ namespace VCX::Labs::Fluid {
 
     // 水槽边界框 — 单位立方体 [-0.5, 0.5] 的线框索引
     static std::vector<glm::vec3> const kBoundaryVertices = {
-        glm::vec3(-0.5f, -0.5f, -0.5f), glm::vec3( 0.5f, -0.5f, -0.5f),
-        glm::vec3( 0.5f,  0.5f, -0.5f), glm::vec3(-0.5f,  0.5f, -0.5f),
-        glm::vec3(-0.5f, -0.5f,  0.5f), glm::vec3( 0.5f, -0.5f,  0.5f),
-        glm::vec3( 0.5f,  0.5f,  0.5f), glm::vec3(-0.5f,  0.5f,  0.5f),
+        glm::vec3(-0.5f, -0.5f, -0.5f),
+        glm::vec3(0.5f, -0.5f, -0.5f),
+        glm::vec3(0.5f, 0.5f, -0.5f),
+        glm::vec3(-0.5f, 0.5f, -0.5f),
+        glm::vec3(-0.5f, -0.5f, 0.5f),
+        glm::vec3(0.5f, -0.5f, 0.5f),
+        glm::vec3(0.5f, 0.5f, 0.5f),
+        glm::vec3(-0.5f, 0.5f, 0.5f),
     };
     static std::vector<std::uint32_t> const kBoundaryIndices = {
-        0,1, 1,2, 2,3, 3,0, // 后面
-        4,5, 5,6, 6,7, 7,4, // 前面
-        0,4, 1,5, 2,6, 3,7  // 连接边
+        0, 1, 1, 2, 2, 3, 3, 0, // 后面
+        4,
+        5,
+        5,
+        6,
+        6,
+        7,
+        7,
+        4, // 前面
+        0,
+        4,
+        1,
+        5,
+        2,
+        6,
+        3,
+        7 // 连接边
     };
 
-    CaseFluid::CaseFluid()
-        : _program(Engine::GL::UniqueProgram({
-              Engine::GL::SharedShader("assets/shaders/fluid.vert"),
-              Engine::GL::SharedShader("assets/shaders/fluid.frag") }))
-        , _lineProgram(Engine::GL::UniqueProgram({
-              Engine::GL::SharedShader("assets/shaders/flat.vert"),
-              Engine::GL::SharedShader("assets/shaders/flat.frag") }))
-        , _sceneObject(1)  // PassConstants UBO 绑定到 binding point 1
-        , _boundaryItem(
-              Engine::GL::VertexLayout()
-                  .Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
-              Engine::GL::PrimitiveType::Lines) {
-
+    CaseFluid::CaseFluid(std::initializer_list<Assets::ExampleScene> && scenes):
+        _scenes(scenes),
+        _program(Engine::GL::UniqueProgram({ Engine::GL::SharedShader("assets/shaders/fluid.vert"), Engine::GL::SharedShader("assets/shaders/fluid.frag") })),
+        _lineProgram(Engine::GL::UniqueProgram({ Engine::GL::SharedShader("assets/shaders/flat.vert"), Engine::GL::SharedShader("assets/shaders/flat.frag") })),
+        _sceneObject(1), // PassConstants UBO 绑定到 binding point 1
+        _boundaryItem(Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0), Engine::GL::PrimitiveType::Lines) {
         // 将着色器的 PassConstants 块映射到 binding point 1
         _program.BindUniformBlock("PassConstants", 1);
         _program.GetUniforms().SetByName("u_AmbientScale", 0.3f);
