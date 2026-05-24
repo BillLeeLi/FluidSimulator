@@ -25,7 +25,7 @@ int main() {
     };
 
     return VCX::Engine::RunApp<App>(VCX::Engine::AppContextOptions {
-        .Title      = "VCX-Labs Example: ImGui",
+        .Title      = "FluidSimulator Example: ImGui",
         .WindowSize = { 800, 600 },
         .FontSize   = 16,
 

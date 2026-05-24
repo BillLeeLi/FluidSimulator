@@ -62,7 +62,7 @@ int main() {
     };
 
     return VCX::Engine::RunApp<App>(VCX::Engine::AppContextOptions {
-        .Title      = "VCX-Labs Example: Triangle",
+        .Title      = "FluidSimulator Example: Triangle",
         .WindowSize = { 800, 600 },
         .FontSize   = 16,
 
