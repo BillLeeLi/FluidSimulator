@@ -1,11 +1,11 @@
 #include "Simulation/App.h"
 #include "Assets/bundled.h"
 
-namespace VCX::Fluid {
+namespace VCX::MainScene {
 
     App::App():
         _ui(Common::UIOptions {}),
-        _casefluid({ Assets::ExampleScene::Fluid }) {
+        _mainScene({ Assets::ExampleScene::Fluid }) {
     }
     void App::OnFrame() {
         _ui.Setup(_cases, _caseId);

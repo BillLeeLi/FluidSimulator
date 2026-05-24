@@ -3,19 +3,19 @@
 #include <vector>
 
 #include "Engine/app.h"
-#include "Simulation/CaseFluid.h"
+#include "Simulation/MainScene.h"
 #include "Common/UI.h"
 
-namespace VCX::Fluid {
+namespace VCX::MainScene {
     class App : public Engine::IApp {
     private:
         Common::UI _ui;
 
-        CaseFluid _casefluid;
+        MainScene _mainScene;
 
         std::size_t _caseId = 0;
 
-        std::vector<std::reference_wrapper<Common::ICase>> _cases = { _casefluid };
+        std::vector<std::reference_wrapper<Common::ICase>> _cases = { _mainScene };
 
     public:
         App();

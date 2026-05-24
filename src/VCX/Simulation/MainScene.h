@@ -11,11 +11,11 @@
 #include "Scene/Content.h"
 #include "Scene/SceneObject.h"
 
-namespace VCX::Fluid {
+namespace VCX::MainScene {
 
-    class CaseFluid : public Common::ICase {
+    class MainScene: public Common::ICase {
     public:
-        CaseFluid(std::initializer_list<Assets::ExampleScene> && scenes);
+        MainScene(std::initializer_list<Assets::ExampleScene> && scenes);
 
         virtual std::string_view const GetName() override { return "Fluid Simulation"; }
 
@@ -50,11 +50,11 @@ namespace VCX::Fluid {
         int                                 _res { 16 };
         float                               _r;
         int                                 numofSpheres;
-        Simulator                           _simulation;
+        FluidSimulator                           _simulation;
 
         char const *          GetSceneName(std::size_t const i) const { return VCX::Scene::Content::SceneNames[std::size_t(_scenes[i])].c_str(); }
         Engine::Scene const & GetScene(std::size_t const i) const { return VCX::Scene::Content::Scenes[std::size_t(_scenes[i])]; }
         void                  ResetSystem();
     };
 
-} // namespace VCX::Fluid
+} // namespace VCX::MainScene
