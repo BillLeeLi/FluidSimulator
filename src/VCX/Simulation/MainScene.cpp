@@ -1,6 +1,7 @@
 #include "Simulation/MainScene.h"
 #include "Engine/app.h"
 #include "Common/ImGuiHelper.h"
+#include <chrono>
 
 namespace VCX::MainScene {
     // 水槽边界框 — 单位立方体 [-0.5, 0.5] 的线框索引
@@ -54,6 +55,10 @@ namespace VCX::MainScene {
 
         ImGui::Text("Particles: %d", _simulation.m_iNumSpheres);
         ImGui::Text("Grid: %d x %d x %d", _simulation.m_iCellX, _simulation.m_iCellY, _simulation.m_iCellZ);
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Text("Simulate Time: %.3f ms", _lastSimTime);
     }
 
     Common::CaseRenderResult MainScene::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
@@ -62,8 +67,28 @@ namespace VCX::MainScene {
             _sceneObject.ReplaceScene(GetScene(_sceneIdx));
             _cameraManager.Save(_sceneObject.Camera);
         }
-        if (! _stopped)
-            _simulation.SimulateTimestep(1.f / float(_invDeltaTime));
+        if (! _stopped){
+            float frameDt = ImGui::GetIO().DeltaTime;
+            // 为了避免在调试过程中帧率过低导致模拟不稳定，限制最大时间步长
+            if (frameDt > 0.1f) frameDt = 0.1f;
+            _timeAccumulator += frameDt;
+            float dt = 1.0f / float(_invDeltaTime);
+            int stepCount = 0;
+            // 限制每帧最多执行的物理步数，避免在性能跟不上的情况下模拟过度堆积
+            while (_timeAccumulator >= dt && stepCount < 2) {
+                auto startSim = std::chrono::high_resolution_clock::now();
+                _simulation.SimulateTimestep(dt);
+                auto endSim = std::chrono::high_resolution_clock::now();
+                _lastSimTime = std::chrono::duration<float, std::milli>(endSim - startSim).count();
+                
+                _timeAccumulator -= dt;
+                stepCount++;
+            }
+            // 如果堆积的时间依然太多，说明性能跟不上，丢弃剩余时间（允许物理时间慢跑来弥补显示效果）
+            if (_timeAccumulator > dt) {
+                _timeAccumulator = 0.0f;
+            }
+        }
 
         _BoundaryItem.UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(vertex_pos));
         _frame.Resize(desiredSize);
@@ -126,5 +151,6 @@ namespace VCX::MainScene {
         numofSpheres = _simulation.m_iNumSpheres;
         _r           = _simulation.m_particleRadius;
         _sphere      = Engine::Model { Engine::Sphere(4, _r), 0 };
+        _timeAccumulator = 0.0f;
     }
 }; // namespace VCX::MainScene
