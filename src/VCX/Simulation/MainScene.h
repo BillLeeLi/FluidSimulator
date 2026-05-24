@@ -46,6 +46,8 @@ namespace VCX::MainScene {
         Common::OrbitCameraManager          _cameraManager;
         float                               _BndWidth { 2.0f };
         bool                                _stopped { false };
+        float                               _timeAccumulator { 0.0f };
+        float                               _lastSimTime { 0.0f };
         Engine::Model                       _sphere;
         int                                 _res { 16 };
         float                               _r;
