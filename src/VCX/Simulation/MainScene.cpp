@@ -1,8 +1,8 @@
-#include "Simulation/CaseFluid.h"
+#include "Simulation/MainScene.h"
 #include "Engine/app.h"
 #include "Common/ImGuiHelper.h"
 
-namespace VCX::Fluid {
+namespace VCX::MainScene {
     // 水槽边界框 — 单位立方体 [-0.5, 0.5] 的线框索引
     const std::vector<glm::vec3> vertex_pos = {
         glm::vec3(-0.5f, -0.5f, -0.5f),
@@ -16,7 +16,7 @@ namespace VCX::Fluid {
     };
     const std::vector<std::uint32_t> line_index = { 0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7 }; // line index
 
-    CaseFluid::CaseFluid(std::initializer_list<Assets::ExampleScene> && scenes):
+    MainScene::MainScene(std::initializer_list<Assets::ExampleScene> && scenes):
         _scenes(scenes),
         _program(Engine::GL::UniqueProgram({ Engine::GL::SharedShader("assets/shaders/fluid.vert"), Engine::GL::SharedShader("assets/shaders/fluid.frag") })),
         _lineprogram(Engine::GL::UniqueProgram({ Engine::GL::SharedShader("assets/shaders/flat.vert"), Engine::GL::SharedShader("assets/shaders/flat.frag") })),
@@ -35,7 +35,7 @@ namespace VCX::Fluid {
         _sphere = Engine::Model { Engine::Sphere(6, _r), 0 };
     }
 
-    void CaseFluid::OnSetupPropsUI() {
+    void MainScene::OnSetupPropsUI() {
         if (ImGui::Button("Reset System"))
             ResetSystem();
         ImGui::SameLine();
@@ -56,7 +56,7 @@ namespace VCX::Fluid {
         ImGui::Text("Grid: %d x %d x %d", _simulation.m_iCellX, _simulation.m_iCellY, _simulation.m_iCellZ);
     }
 
-    Common::CaseRenderResult CaseFluid::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
+    Common::CaseRenderResult MainScene::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
         if (_recompute) {
             _recompute = false;
             _sceneObject.ReplaceScene(GetScene(_sceneIdx));
@@ -117,14 +117,14 @@ namespace VCX::Fluid {
         };
     }
 
-    void CaseFluid::OnProcessInput(ImVec2 const & pos) {
+    void MainScene::OnProcessInput(ImVec2 const & pos) {
         _cameraManager.ProcessInput(_sceneObject.Camera, pos);
     }
 
-    void CaseFluid::ResetSystem() {
+    void MainScene::ResetSystem() {
         _simulation.setupScene(_res);
         numofSpheres = _simulation.m_iNumSpheres;
         _r           = _simulation.m_particleRadius;
         _sphere      = Engine::Model { Engine::Sphere(4, _r), 0 };
     }
-}; // namespace VCX::Fluid
+}; // namespace VCX::MainScene
