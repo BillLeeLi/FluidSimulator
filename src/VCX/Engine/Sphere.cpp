@@ -1,6 +1,4 @@
-#pragma once
-
-#include <vector>
+#include <cmath>
 #include <glm/glm.hpp>
 #include "Sphere.h"
 
@@ -28,8 +26,8 @@ namespace VCX::Engine{
                 float y = static_cast<float>(cos(
                     toRadians(180.0f - i * 180.0f / (float) precision)));
                 float tmp = toRadians(j * 360 / (float) precision);
-                float x = static_cast<float>(-cos(tmp) * abs(cos(asin(y))));
-                float z = static_cast<float>(sin(tmp) * abs(cos(asin(y))));
+                float x = static_cast<float>(-cos(tmp) * std::abs(cos(asin(y))));
+                float z = static_cast<float>(sin(tmp) * std::abs(cos(asin(y))));
                 int idx = i * (precision + 1) + j;
                 Positions[idx] = radius * glm::vec3(x, y, z);
                 TexCoords[idx] = glm::vec2(j / (float) precision, 
@@ -51,4 +49,3 @@ namespace VCX::Engine{
         }
     }
 }
-

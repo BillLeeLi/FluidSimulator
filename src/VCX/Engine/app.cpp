@@ -41,7 +41,8 @@ namespace VCX::Engine {
 namespace VCX::Engine::Internal {
     static void glfwErrorCallback(int const error, char const * const description) {
         spdlog::error("GLFW Error {}: {}", error, description);
-        std::exit(EXIT_FAILURE);
+        if (error != GLFW_FEATURE_UNAVAILABLE && error != GLFW_FEATURE_UNIMPLEMENTED)
+            std::exit(EXIT_FAILURE);
     }
 
     static void glfwWindowRefreshCallback(GLFWwindow * const _) {
@@ -68,7 +69,8 @@ namespace VCX::Engine::Internal {
     void RunApp_Init(AppContextOptions const & options) {
         RunApp_InitGLFW(options);
         #ifndef PLATFORM_MACOSX
-            RunApp_InitGLFWWindowIcons(options);
+            if (glfwGetPlatform() != GLFW_PLATFORM_WAYLAND)
+                RunApp_InitGLFWWindowIcons(options);
         #endif
         RunApp_InitGLAD();
         RunApp_InitImGui(options);
@@ -103,7 +105,6 @@ namespace VCX::Engine::Internal {
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE); // for macos
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
         glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
         assert(*(options.Title.cend()) == '\0');
         g_glfwWindow = glfwCreateWindow(

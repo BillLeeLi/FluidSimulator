@@ -8,7 +8,7 @@ add_cxxflags("/utf-8")
 
 add_requires("fcl")
 add_requires("glad")
-add_requires("glfw")
+add_requires("glfw", {configs = {wayland = true}})
 add_requires("glm")
 add_requires("imgui v1.90.8")
 add_requires("spdlog")
