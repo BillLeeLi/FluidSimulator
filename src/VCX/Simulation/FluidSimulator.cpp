@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace VCX::MainScene {
 
@@ -468,7 +469,7 @@ namespace VCX::MainScene {
             maxPressure = std::max(maxPressure, std::abs(m_p[id]));
 
         for (int i = 0; i < m_iNumSpheres; ++i) {
-            // 三线性插值获取粒子位置处的压力
+            // 仅从有效流体单元采样压力，避免把 solid/empty 的 0 压力混入边界粒子着色。
             glm::vec3 g  = (m_particlePos[i] + glm::vec3(0.5f)) * m_fInvSpacing;
             int       ix = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 2);
             int       iy = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 2);
@@ -481,22 +482,59 @@ namespace VCX::MainScene {
             int iy0 = iy, iy1 = std::min(iy + 1, m_iCellY - 1);
             int iz0 = iz, iz1 = std::min(iz + 1, m_iCellZ - 1);
 
-            float p000 = m_p[index2GridOffset(glm::ivec3(ix0, iy0, iz0))];
-            float p100 = m_p[index2GridOffset(glm::ivec3(ix1, iy0, iz0))];
-            float p010 = m_p[index2GridOffset(glm::ivec3(ix0, iy1, iz0))];
-            float p110 = m_p[index2GridOffset(glm::ivec3(ix1, iy1, iz0))];
-            float p001 = m_p[index2GridOffset(glm::ivec3(ix0, iy0, iz1))];
-            float p101 = m_p[index2GridOffset(glm::ivec3(ix1, iy0, iz1))];
-            float p011 = m_p[index2GridOffset(glm::ivec3(ix0, iy1, iz1))];
-            float p111 = m_p[index2GridOffset(glm::ivec3(ix1, iy1, iz1))];
+            auto accumulatePressure = [&](int x, int y, int z, float w, float & sum, float & wsum) {
+                int const id = index2GridOffset(glm::ivec3(x, y, z));
+                if (m_type[id] != FLUID_CELL || w <= 0.0f) return;
+                sum += w * m_p[id];
+                wsum += w;
+            };
 
-            float p00 = p000 * (1.0f - fx) + p100 * fx;
-            float p10 = p010 * (1.0f - fx) + p110 * fx;
-            float p01 = p001 * (1.0f - fx) + p101 * fx;
-            float p11 = p011 * (1.0f - fx) + p111 * fx;
-            float p0  = p00 * (1.0f - fy) + p10 * fy;
-            float p1  = p01 * (1.0f - fy) + p11 * fy;
-            float p   = p0 * (1.0f - fz) + p1 * fz;
+            float pressureSum    = 0.0f;
+            float pressureWeight = 0.0f;
+
+            for (int dx = 0; dx <= 1; ++dx) {
+                float wx = dx ? fx : (1.0f - fx);
+                int   sx = dx ? ix1 : ix0;
+                for (int dy = 0; dy <= 1; ++dy) {
+                    float wy = dy ? fy : (1.0f - fy);
+                    int   sy = dy ? iy1 : iy0;
+                    for (int dz = 0; dz <= 1; ++dz) {
+                        float wz = dz ? fz : (1.0f - fz);
+                        int   sz = dz ? iz1 : iz0;
+                        accumulatePressure(sx, sy, sz, wx * wy * wz, pressureSum, pressureWeight);
+                    }
+                }
+            }
+
+            float p = 0.0f;
+            if (pressureWeight > 1e-6f) {
+                p = pressureSum / pressureWeight;
+            } else {
+                int const centerId = index2GridOffset(worldToSlot(m_particlePos[i]));
+                if (m_type[centerId] == FLUID_CELL) {
+                    p = m_p[centerId];
+                } else {
+                    float nearestDist2 = std::numeric_limits<float>::max();
+                    for (int dx = 0; dx <= 1; ++dx) {
+                        int sx = dx ? ix1 : ix0;
+                        for (int dy = 0; dy <= 1; ++dy) {
+                            int sy = dy ? iy1 : iy0;
+                            for (int dz = 0; dz <= 1; ++dz) {
+                                int const sz = dz ? iz1 : iz0;
+                                int const id = index2GridOffset(glm::ivec3(sx, sy, sz));
+                                if (m_type[id] != FLUID_CELL) continue;
+
+                                glm::vec3 const cellPos = glm::vec3(sx, sy, sz) * m_h + glm::vec3(-0.5f);
+                                float const     dist2   = glm::dot(cellPos - m_particlePos[i], cellPos - m_particlePos[i]);
+                                if (dist2 < nearestDist2) {
+                                    nearestDist2 = dist2;
+                                    p            = m_p[id];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             float t            = std::abs(p) / maxPressure;
             m_particleColor[i] = ramp(t);
@@ -610,9 +648,9 @@ namespace VCX::MainScene {
             for (int j = 0; j < m_iCellY; j++) {
                 for (int k = 0; k < m_iCellZ; k++) {
                     float s = 1.0f; // 默认非固体
-                    if (i == 0 || i >= m_iCellX - 2
-                        || j == 0 || j >= m_iCellY - 2
-                        || k == 0 || k >= m_iCellZ - 2)
+                    if (i == 0 || i == m_iCellX - 1
+                        || j == 0 || j == m_iCellY - 1
+                        || k == 0 || k == m_iCellZ - 1)
                         s = 0.0f; // 边界固体
                     m_s[i * n + j * m + k] = s;
                 }
