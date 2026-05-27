@@ -541,34 +541,6 @@ namespace VCX::MainScene {
         }
     }
 
-    void FluidSimulator::SimulateTimestep(float const dt) {
-        int   numSubSteps       = 1;
-        int   numParticleIters  = 5;
-        int   numPressureIters  = 30;
-        bool  separateParticles = true;
-        float overRelaxation    = 1.9f;
-        bool  compensateDrift   = false;
-
-        float     flipRatio = m_fRatio;
-        glm::vec3 obstaclePos(0.0f);
-        glm::vec3 obstacleVel(0.0f);
-
-        float sdt = dt / numSubSteps;
-
-        for (int step = 0; step < numSubSteps; step++) {
-            integrateParticles(sdt);
-            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
-            if (separateParticles)
-                pushParticlesApart(numParticleIters);
-            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
-            transferVelocities(true, flipRatio);
-            updateParticleDensity();
-            solveIncompressibility(numPressureIters, sdt, overRelaxation, compensateDrift);
-            transferVelocities(false, flipRatio);
-        }
-        updateParticleColors();
-    }
-
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
         glm::vec3 relWater = { 0.6f, 0.8f, 0.6f };

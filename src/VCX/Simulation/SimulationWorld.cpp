@@ -28,7 +28,27 @@ namespace VCX::MainScene {
 
     void SimulationWorld::Step(float dt) {
         _coupler.ResetDebug();
-        _fluid.SimulateTimestep(dt);
+
+        int const   numSubSteps = std::max(1, _numSubSteps);
+        float const sdt         = dt / float(numSubSteps);
+        float const flipRatio   = _fluid.m_fRatio;
+
+        glm::vec3 const obstaclePos(0.0f);
+        glm::vec3 const obstacleVel(0.0f);
+
+        for (int step = 0; step < numSubSteps; ++step) {
+            _fluid.integrateParticles(sdt);
+            _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            if (_separateParticles)
+                _fluid.pushParticlesApart(_numParticleIters);
+            _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            _fluid.transferVelocities(true, flipRatio);
+            _fluid.updateParticleDensity();
+            _fluid.solveIncompressibility(_numPressureIters, sdt, _overRelaxation, _compensateDrift);
+            _fluid.transferVelocities(false, flipRatio);
+        }
+
+        _fluid.updateParticleColors();
     }
 
     void SimulationWorld::StepFrame(float frameDt) {

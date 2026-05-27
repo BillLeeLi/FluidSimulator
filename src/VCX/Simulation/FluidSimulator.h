@@ -77,9 +77,6 @@ namespace VCX::MainScene {
         // Step 7: 更新粒子颜色 — 根据压力大小着色 (蓝→青→红)
         void updateParticleColors();
 
-        // ==================== 主模拟循环 ====================
-        void SimulateTimestep(float const dt);
-
         // ==================== 场景初始化 ====================
         void setupScene(int res);
 
