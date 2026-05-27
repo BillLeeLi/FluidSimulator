@@ -4,14 +4,21 @@
 #include "Engine/GL/Program.h"
 #include "Engine/GL/UniformBlock.hpp"
 #include "Engine/Sphere.h"
-#include "Simulation/FluidSimulator.h"
+#include "Simulation/SimulationWorld.h"
 #include "Common/ICase.h"
 #include "Common/ImageRGB.h"
 #include "Common/OrbitCameraManager.h"
 #include "Scene/Content.h"
 #include "Scene/SceneObject.h"
 
+#include <optional>
+
 namespace VCX::MainScene {
+
+    struct WorldRay {
+        glm::vec3 Origin { 0.0f };
+        glm::vec3 Direction { 0.0f, 0.0f, -1.0f };
+    };
 
     class MainScene: public Common::ICase {
     public:
@@ -40,23 +47,25 @@ namespace VCX::MainScene {
         bool                          _useGammaCorrection { true };
         int                           _attenuationOrder { 2 };
         int                           _bumpMappingPercent { 20 };
-        int                           _invDeltaTime { 60 };
 
         Engine::GL::UniqueIndexedRenderItem _BoundaryItem;
         Common::OrbitCameraManager          _cameraManager;
         float                               _BndWidth { 2.0f };
         bool                                _stopped { false };
-        float                               _timeAccumulator { 0.0f };
-        float                               _lastSimTime { 0.0f };
         Engine::Model                       _sphere;
-        int                                 _res { 16 };
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _particleItem;
+        std::pair<std::uint32_t, std::uint32_t> _viewportSize { 1, 1 };
         float                               _r;
-        int                                 numofSpheres;
-        FluidSimulator                           _simulation;
+        SimulationWorld                     _world;
 
         char const *          GetSceneName(std::size_t const i) const { return VCX::Scene::Content::SceneNames[std::size_t(_scenes[i])].c_str(); }
         Engine::Scene const & GetScene(std::size_t const i) const { return VCX::Scene::Content::Scenes[std::size_t(_scenes[i])]; }
+        // 重置系统状态
         void                  ResetSystem();
+        void                  ResetSystem(int res);
+        // 重建粒子渲染项（当粒子数量或半径改变时调用）
+        void                  RebuildParticleRenderItem();
+        WorldRay              ScreenPointToWorldRay(ImVec2 const & pos) const;
     };
 
 } // namespace VCX::MainScene

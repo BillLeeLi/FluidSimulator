@@ -1,7 +1,6 @@
 #include "Simulation/MainScene.h"
 #include "Engine/app.h"
 #include "Common/ImGuiHelper.h"
-#include <chrono>
 
 namespace VCX::MainScene {
     // 水槽边界框 — 单位立方体 [-0.5, 0.5] 的线框索引
@@ -33,7 +32,6 @@ namespace VCX::MainScene {
         _lineprogram.GetUniforms().SetByName("u_Color", glm::vec3(1.0f));
         _BoundaryItem.UpdateElementBuffer(line_index);
         ResetSystem();
-        _sphere = Engine::Model { Engine::Sphere(6, _r), 0 };
     }
 
     void MainScene::OnSetupPropsUI() {
@@ -44,51 +42,39 @@ namespace VCX::MainScene {
             _stopped = ! _stopped;
         ImGui::Spacing();
 
-        ImGui::SliderFloat("FLIP Ratio", &_simulation.m_fRatio, 0.0f, 1.0f);
+        float flipRatio = _world.FlipRatio();
+        if (ImGui::SliderFloat("FLIP Ratio", &flipRatio, 0.0f, 1.0f))
+            _world.SetFlipRatio(flipRatio);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("0 = PIC (stable, dissipative)\n1 = FLIP (non-dissipative, noisy)\n0.95 = FLIP95 (recommended)");
 
-        if (ImGui::SliderInt("Resolution", &_res, 8, 32))
-            ResetSystem();
+        int resolution = _world.Resolution();
+        if (ImGui::SliderInt("Resolution", &resolution, 8, 32))
+            ResetSystem(resolution);
 
-        (ImGui::SliderInt("Inv Time Step", &_invDeltaTime, 20, 240));
+        int invDeltaTime = _world.InvDeltaTime();
+        if (ImGui::SliderInt("Inv Time Step", &invDeltaTime, 20, 240))
+            _world.SetInvDeltaTime(invDeltaTime);
 
-        ImGui::Text("Particles: %d", _simulation.m_iNumSpheres);
-        ImGui::Text("Grid: %d x %d x %d", _simulation.m_iCellX, _simulation.m_iCellY, _simulation.m_iCellZ);
+        auto const & fluid = _world.GetFluid();
+        ImGui::Text("Particles: %d", fluid.m_iNumSpheres);
+        ImGui::Text("Grid: %d x %d x %d", fluid.m_iCellX, fluid.m_iCellY, fluid.m_iCellZ);
         
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Text("Simulate Time: %.3f ms", _lastSimTime);
+        ImGui::Text("Simulate Time: %.3f ms", _world.LastSimTimeMs());
     }
 
     Common::CaseRenderResult MainScene::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
+        _viewportSize = desiredSize;
+
         if (_recompute) {
             _recompute = false;
             _sceneObject.ReplaceScene(GetScene(_sceneIdx));
             _cameraManager.Save(_sceneObject.Camera);
         }
-        if (! _stopped){
-            float frameDt = ImGui::GetIO().DeltaTime;
-            // 为了避免在调试过程中帧率过低导致模拟不稳定，限制最大时间步长
-            if (frameDt > 0.1f) frameDt = 0.1f;
-            _timeAccumulator += frameDt;
-            float dt = 1.0f / float(_invDeltaTime);
-            int stepCount = 0;
-            // 限制每帧最多执行的物理步数，避免在性能跟不上的情况下模拟过度堆积
-            while (_timeAccumulator >= dt && stepCount < 2) {
-                auto startSim = std::chrono::high_resolution_clock::now();
-                _simulation.SimulateTimestep(dt);
-                auto endSim = std::chrono::high_resolution_clock::now();
-                _lastSimTime = std::chrono::duration<float, std::milli>(endSim - startSim).count();
-                
-                _timeAccumulator -= dt;
-                stepCount++;
-            }
-            // 如果堆积的时间依然太多，说明性能跟不上，丢弃剩余时间（允许物理时间慢跑来弥补显示效果）
-            if (_timeAccumulator > dt) {
-                _timeAccumulator = 0.0f;
-            }
-        }
+        if (! _stopped)
+            _world.StepFrame(ImGui::GetIO().DeltaTime);
 
         _BoundaryItem.UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(vertex_pos));
         _frame.Resize(desiredSize);
@@ -117,21 +103,19 @@ namespace VCX::MainScene {
         _BoundaryItem.Draw({ _lineprogram.Use() });
         glLineWidth(1.0f);
 
-        if (_simulation.m_iNumSpheres > 0) {
-            auto const modelObj = Scene::ModelObject(
-                _sphere,
-                _simulation.m_particlePos,
-                _simulation.m_particleColor);
-
-            modelObj.Mesh.Draw(
+        auto const & fluid = _world.GetFluid();
+        if (fluid.m_iNumSpheres > 0 && _particleItem) {
+            _particleItem->UpdateVertexBuffer("offset", Engine::make_span_bytes<glm::vec3>(fluid.m_particlePos));
+            _particleItem->UpdateVertexBuffer("color", Engine::make_span_bytes<glm::vec3>(fluid.m_particleColor));
+            _particleItem->Draw(
                 { _program.Use() },
                 _sphere.Mesh.Indices.size(),
                 0,
-                _simulation.m_iNumSpheres);
+                fluid.m_iNumSpheres);
         }
 
-        glDepthFunc(GL_LEQUAL);
-        glDepthFunc(GL_LESS);
+        // glDepthFunc(GL_LEQUAL);
+        glDepthFunc(GL_LESS);   // 只在片段深度值小于当前深度缓冲区值时绘制
         glDisable(GL_DEPTH_TEST);
 
         return Common::CaseRenderResult {
@@ -147,10 +131,56 @@ namespace VCX::MainScene {
     }
 
     void MainScene::ResetSystem() {
-        _simulation.setupScene(_res);
-        numofSpheres = _simulation.m_iNumSpheres;
-        _r           = _simulation.m_particleRadius;
-        _sphere      = Engine::Model { Engine::Sphere(4, _r), 0 };
-        _timeAccumulator = 0.0f;
+        _world.Reset();
+        _r      = _world.GetFluid().m_particleRadius;
+        _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        RebuildParticleRenderItem();
+    }
+
+    void MainScene::ResetSystem(int res) {
+        _world.Reset(res);
+        _r      = _world.GetFluid().m_particleRadius;
+        _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        RebuildParticleRenderItem();
+    }
+
+    void MainScene::RebuildParticleRenderItem() {
+        _particleItem.emplace(
+            Engine::GL::VertexLayout()
+                .Add<glm::vec3>("position", Engine::GL::DrawFrequency::Static, 0)
+                .Add<glm::vec3>("normal", Engine::GL::DrawFrequency::Static, 1)
+                .Add<glm::vec3>("offset", Engine::GL::DrawFrequency::Stream, 2)
+                .Add<glm::vec3>("color", Engine::GL::DrawFrequency::Stream, 3),
+            Engine::GL::PrimitiveType::Triangles);
+        _particleItem->UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(_sphere.Mesh.Positions));
+        _particleItem->UpdateVertexBuffer("normal", Engine::make_span_bytes<glm::vec3>(_sphere.Mesh.Normals));
+        _particleItem->UpdateVertexBuffer("offset", Engine::make_span_bytes<glm::vec3>(_world.GetFluid().m_particlePos));
+        _particleItem->UpdateVertexBuffer("color", Engine::make_span_bytes<glm::vec3>(_world.GetFluid().m_particleColor));
+        _particleItem->SetAttributeDivisor(2, 1);
+        _particleItem->SetAttributeDivisor(3, 1);
+        _particleItem->UpdateElementBuffer(_sphere.Mesh.Indices);
+    }
+
+    WorldRay MainScene::ScreenPointToWorldRay(ImVec2 const & pos) const {
+        float const width  = float(std::max<std::uint32_t>(_viewportSize.first, 1));
+        float const height = float(std::max<std::uint32_t>(_viewportSize.second, 1));
+        float const aspect = width / height;
+
+        float const x = 2.0f * pos.x / width - 1.0f;
+        float const y = 1.0f - 2.0f * pos.y / height;
+
+        glm::mat4 const invViewProj = glm::inverse(
+            _sceneObject.Camera.GetProjectionMatrix(aspect) *
+            _sceneObject.Camera.GetViewMatrix());
+
+        glm::vec4 nearPoint = invViewProj * glm::vec4(x, y, -1.0f, 1.0f);
+        glm::vec4 farPoint  = invViewProj * glm::vec4(x, y, 1.0f, 1.0f);
+        nearPoint /= nearPoint.w;
+        farPoint /= farPoint.w;
+
+        return WorldRay {
+            .Origin    = _sceneObject.Camera.Eye,
+            .Direction = glm::normalize(glm::vec3(farPoint - nearPoint)),
+        };
     }
 }; // namespace VCX::MainScene
