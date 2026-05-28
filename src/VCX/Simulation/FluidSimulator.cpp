@@ -465,73 +465,7 @@ namespace VCX::MainScene {
             maxPressure = std::max(maxPressure, std::abs(m_p[id]));
 
         for (int i = 0; i < m_iNumSpheres; ++i) {
-            // 仅从有效流体单元采样压力，避免把 solid/empty 的 0 压力混入边界粒子着色。
-            glm::vec3 g  = (m_particlePos[i] + glm::vec3(0.5f)) * m_fInvSpacing;
-            int       ix = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 2);
-            int       iy = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 2);
-            int       iz = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 2);
-            float     fx = g.x - ix;
-            float     fy = g.y - iy;
-            float     fz = g.z - iz;
-
-            int ix0 = ix, ix1 = std::min(ix + 1, m_iCellX - 1);
-            int iy0 = iy, iy1 = std::min(iy + 1, m_iCellY - 1);
-            int iz0 = iz, iz1 = std::min(iz + 1, m_iCellZ - 1);
-
-            auto accumulatePressure = [&](int x, int y, int z, float w, float & sum, float & wsum) {
-                int const id = index2GridOffset(glm::ivec3(x, y, z));
-                if (m_type[id] != FLUID_CELL || w <= 0.0f) return;
-                sum += w * m_p[id];
-                wsum += w;
-            };
-
-            float pressureSum    = 0.0f;
-            float pressureWeight = 0.0f;
-
-            for (int dx = 0; dx <= 1; ++dx) {
-                float wx = dx ? fx : (1.0f - fx);
-                int   sx = dx ? ix1 : ix0;
-                for (int dy = 0; dy <= 1; ++dy) {
-                    float wy = dy ? fy : (1.0f - fy);
-                    int   sy = dy ? iy1 : iy0;
-                    for (int dz = 0; dz <= 1; ++dz) {
-                        float wz = dz ? fz : (1.0f - fz);
-                        int   sz = dz ? iz1 : iz0;
-                        accumulatePressure(sx, sy, sz, wx * wy * wz, pressureSum, pressureWeight);
-                    }
-                }
-            }
-
-            float p = 0.0f;
-            if (pressureWeight > 1e-6f) {
-                p = pressureSum / pressureWeight;
-            } else {
-                int const centerId = index2GridOffset(worldToCell(m_particlePos[i]));
-                if (m_type[centerId] == FLUID_CELL) {
-                    p = m_p[centerId];
-                } else {
-                    float nearestDist2 = std::numeric_limits<float>::max();
-                    for (int dx = 0; dx <= 1; ++dx) {
-                        int sx = dx ? ix1 : ix0;
-                        for (int dy = 0; dy <= 1; ++dy) {
-                            int sy = dy ? iy1 : iy0;
-                            for (int dz = 0; dz <= 1; ++dz) {
-                                int const sz = dz ? iz1 : iz0;
-                                int const id = index2GridOffset(glm::ivec3(sx, sy, sz));
-                                if (m_type[id] != FLUID_CELL) continue;
-
-                                glm::vec3 const cellPos = glm::vec3(sx, sy, sz) * m_h + glm::vec3(-0.5f);
-                                float const     dist2   = glm::dot(cellPos - m_particlePos[i], cellPos - m_particlePos[i]);
-                                if (dist2 < nearestDist2) {
-                                    nearestDist2 = dist2;
-                                    p            = m_p[id];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
+            float p = SamplePressure(m_particlePos[i]);
             float t            = std::abs(p) / maxPressure;
             m_particleColor[i] = ramp(t);
         }
@@ -679,7 +613,80 @@ namespace VCX::MainScene {
     }
 
     float FluidSimulator::SamplePressure(glm::vec3 const & p) const {
-        return 0.0f; // make linker happy
+        if (m_iNumCells <= 0 || m_p.empty() || m_type.empty()) return 0.0f;
+
+        glm::vec3 const gRaw = (p + glm::vec3(0.5f)) * m_fInvSpacing - glm::vec3(0.5f);
+        glm::vec3 const g(
+            glm::clamp(gRaw.x, 0.0f, float(m_iCellX - 1)),
+            glm::clamp(gRaw.y, 0.0f, float(m_iCellY - 1)),
+            glm::clamp(gRaw.z, 0.0f, float(m_iCellZ - 1)));
+
+        int const ix0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 1);
+        int const iy0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 1);
+        int const iz0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 1);
+        int const ix1 = std::min(ix0 + 1, m_iCellX - 1);
+        int const iy1 = std::min(iy0 + 1, m_iCellY - 1);
+        int const iz1 = std::min(iz0 + 1, m_iCellZ - 1);
+
+        float const fx = glm::clamp(g.x - float(ix0), 0.0f, 1.0f);
+        float const fy = glm::clamp(g.y - float(iy0), 0.0f, 1.0f);
+        float const fz = glm::clamp(g.z - float(iz0), 0.0f, 1.0f);
+
+        auto sampleCellPressure = [&](glm::ivec3 cell) -> float {
+            if (! IsInsideGrid(cell)) return 0.0f;
+
+            int const id = index2GridOffset(cell);
+            if (m_type[id] == FLUID_CELL) return m_p[id];
+            if (m_type[id] == EMPTY_CELL) return 0.0f;
+
+            // Solid cell: use a local ghost-pressure extrapolation consistent with
+            // a zero-normal-gradient (Neumann) wall condition by borrowing the
+            // nearest neighboring fluid pressure.
+            float bestPressure = 0.0f;
+            float bestDist2    = std::numeric_limits<float>::max();
+            bool  foundFluid   = false;
+
+            for (int dx = -1; dx <= 1; ++dx) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dz = -1; dz <= 1; ++dz) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+
+                        glm::ivec3 const neighbor = cell + glm::ivec3(dx, dy, dz);
+                        if (! IsInsideGrid(neighbor)) continue;
+
+                        int const neighborId = index2GridOffset(neighbor);
+                        if (m_type[neighborId] != FLUID_CELL) continue;
+
+                        glm::vec3 const neighborCenter = CellCenter(neighbor);
+                        float const dist2 = glm::dot(neighborCenter - p, neighborCenter - p);
+                        if (dist2 < bestDist2) {
+                            bestDist2    = dist2;
+                            bestPressure = m_p[neighborId];
+                            foundFluid   = true;
+                        }
+                    }
+                }
+            }
+
+            return foundFluid ? bestPressure : 0.0f;
+        };
+
+        float const c000 = sampleCellPressure(glm::ivec3(ix0, iy0, iz0));
+        float const c100 = sampleCellPressure(glm::ivec3(ix1, iy0, iz0));
+        float const c010 = sampleCellPressure(glm::ivec3(ix0, iy1, iz0));
+        float const c110 = sampleCellPressure(glm::ivec3(ix1, iy1, iz0));
+        float const c001 = sampleCellPressure(glm::ivec3(ix0, iy0, iz1));
+        float const c101 = sampleCellPressure(glm::ivec3(ix1, iy0, iz1));
+        float const c011 = sampleCellPressure(glm::ivec3(ix0, iy1, iz1));
+        float const c111 = sampleCellPressure(glm::ivec3(ix1, iy1, iz1));
+
+        float const c00 = glm::mix(c000, c100, fx);
+        float const c10 = glm::mix(c010, c110, fx);
+        float const c01 = glm::mix(c001, c101, fx);
+        float const c11 = glm::mix(c011, c111, fx);
+        float const c0  = glm::mix(c00, c10, fy);
+        float const c1  = glm::mix(c01, c11, fy);
+        return glm::mix(c0, c1, fz);
     }
 
     glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p) const {
