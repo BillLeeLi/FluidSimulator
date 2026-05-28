@@ -36,7 +36,7 @@ namespace VCX::MainScene {
         Engine::GL::UniqueProgram     _program;
         Engine::GL::UniqueProgram     _lineprogram;
         Engine::GL::UniqueRenderFrame _frame;
-        Scene::SceneObject        _sceneObject;
+        Scene::SceneObject            _sceneObject;
         std::size_t                   _sceneIdx { 0 };
         bool                          _recompute { true };
         bool                          _uniformDirty { true };
@@ -54,17 +54,20 @@ namespace VCX::MainScene {
         bool                                _stopped { false };
         Engine::Model                       _sphere;
         std::optional<Engine::GL::UniqueIndexedRenderItem> _particleItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBodyLineItem;
         std::pair<std::uint32_t, std::uint32_t> _viewportSize { 1, 1 };
         float                               _r;
         SimulationWorld                     _world;
 
         char const *          GetSceneName(std::size_t const i) const { return VCX::Scene::Content::SceneNames[std::size_t(_scenes[i])].c_str(); }
         Engine::Scene const & GetScene(std::size_t const i) const { return VCX::Scene::Content::Scenes[std::size_t(_scenes[i])]; }
-        // 重置系统状态
         void                  ResetSystem();
         void                  ResetSystem(int res);
-        // 重建粒子渲染项（当粒子数量或半径改变时调用）
         void                  RebuildParticleRenderItem();
+        void                  RebuildRigidBodyRenderItem();
+        void                  UpdateRigidBodyRenderItem();
+        void                  DrawRigidBodyControls();
+        void                  ApplyRigidBodyKeyboardControls();
         WorldRay              ScreenPointToWorldRay(ImVec2 const & pos) const;
     };
 
