@@ -8,9 +8,14 @@ namespace VCX::MainScene {
     void SimulationWorld::Setup(int res) {
         _resolution = std::max(1, res);
         _fluid.setupScene(_resolution);
-        _rigidBodies.Clear();
+        _rigidBodies.SetupDefaultScene(_rigidBodyPreset);
         _timeAccumulator = 0.0f;
         _lastSimTimeMs   = 0.0f;
+        _externalForce.setZero();
+        _externalTorque.setZero();
+        _externalImpulse.setZero();
+        _externalBody = -1;
+        SetSelectedRigidBody(_selectedRigidBody);
     }
 
     void SimulationWorld::Reset() {
@@ -22,8 +27,25 @@ namespace VCX::MainScene {
     }
 
     void SimulationWorld::ApplyExternalForceToBody(int bodyIndex, glm::vec3 const & force) {
-        // 这里对接刚体系统中将外力应用到指定刚体上
-        // 例如: _rigidBodies.ApplyForce(bodyIndex, force);
+        ApplyExternalForceToBody(bodyIndex, ToEigen(force));
+    }
+
+    void SimulationWorld::ApplyExternalForceToBody(int bodyIndex, Eigen::Vector3f const & force) {
+        if (! _rigidBodies.IsValidBody(bodyIndex)) return;
+        _externalBody = bodyIndex;
+        _externalForce += force;
+    }
+
+    void SimulationWorld::ApplyExternalTorqueToBody(int bodyIndex, Eigen::Vector3f const & torque) {
+        if (! _rigidBodies.IsValidBody(bodyIndex)) return;
+        _externalBody = bodyIndex;
+        _externalTorque += torque;
+    }
+
+    void SimulationWorld::ApplyImpulseToBody(int bodyIndex, Eigen::Vector3f const & impulse) {
+        if (! _rigidBodies.IsValidBody(bodyIndex)) return;
+        _externalBody = bodyIndex;
+        _externalImpulse += impulse;
     }
 
     void SimulationWorld::Step(float dt) {
@@ -37,6 +59,25 @@ namespace VCX::MainScene {
         glm::vec3 const obstacleVel(0.0f);
 
         for (int step = 0; step < numSubSteps; ++step) {
+            // 1. Rigid body part.  This preserves the Lab1 style: explicit Euler
+            // integration + FCL narrow-phase + sequential impulse contact solve.
+            if (_rigidBodies.IsValidBody(_externalBody)) {
+                if (_externalForce.squaredNorm() > 0.0f) {
+                    _rigidBodies.ApplyForceToCenter(_externalBody, _externalForce);
+                }
+                if (_externalTorque.squaredNorm() > 0.0f) {
+                    _rigidBodies.ApplyTorque(_externalBody, _externalTorque);
+                }
+                if (_externalImpulse.squaredNorm() > 0.0f) {
+                    _rigidBodies.ApplyImpulseToCenter(_externalBody, _externalImpulse);
+                    _externalImpulse.setZero();
+                }
+            }
+            _rigidBodies.Step(sdt);
+            _rigidBodies.ResolveTankBounds(-0.5f + _fluid.m_h, 0.5f - _fluid.m_h);
+
+            // 2. Fluid part.  This is intentionally kept in the original order so
+            // the old FLIP fluid behavior is not disturbed before coupling is added.
             _fluid.integrateParticles(sdt);
             _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
             if (_separateParticles)
@@ -48,6 +89,9 @@ namespace VCX::MainScene {
             _fluid.transferVelocities(false, flipRatio);
         }
 
+        _externalForce.setZero();
+        _externalTorque.setZero();
+        _externalBody = -1;
         _fluid.updateParticleColors();
     }
 
@@ -79,6 +123,24 @@ namespace VCX::MainScene {
 
     void SimulationWorld::SetFlipRatio(float flipRatio) {
         _fluid.m_fRatio = std::clamp(flipRatio, 0.0f, 1.0f);
+    }
+
+    void SimulationWorld::SetSelectedRigidBody(int id) {
+        if (_rigidBodies.Bodies.empty()) {
+            _selectedRigidBody = -1;
+            return;
+        }
+        _selectedRigidBody = std::clamp(id, 0, static_cast<int>(_rigidBodies.Bodies.size()) - 1);
+    }
+
+    void SimulationWorld::SetRigidKeyboardForce(float force) {
+        _rigidKeyboardForce = std::max(0.0f, force);
+    }
+
+    void SimulationWorld::SetRigidPreset(RigidBodyPreset preset) {
+        if (_rigidBodyPreset == preset) return;
+        _rigidBodyPreset = preset;
+        Reset();
     }
 
 } // namespace VCX::MainScene
