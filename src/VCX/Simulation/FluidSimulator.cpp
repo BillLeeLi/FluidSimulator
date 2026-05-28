@@ -741,8 +741,25 @@ namespace VCX::MainScene {
         return pic_vel;
     }
 
-    // void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
-    //     return glm::vec3(0.0f); // make linker happy
-    // }
+     void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
+        float     flipRatio = m_fRatio;
+        glm::vec3 obstaclePos(0.0f);
+        glm::vec3 obstacleVel(0.0f);
+
+        float sdt = dt / cfg.numSubSteps;
+
+        for (int step = 0; step < cfg.numSubSteps; step++) {
+            integrateParticles(sdt);
+            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            if (cfg.separateParticles)
+                pushParticlesApart(cfg.numParticleIters);
+            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            transferVelocities(true, flipRatio);
+            updateParticleDensity();
+            solveIncompressibility(cfg.numPressureIters, sdt, cfg.overRelaxation, cfg.compensateDrift);
+            transferVelocities(false, flipRatio);
+        }
+        updateParticleColors();
+     }
 
 } // namespace VCX::MainScene

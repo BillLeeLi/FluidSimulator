@@ -9,6 +9,16 @@ namespace VCX::MainScene {
     const int FLUID_CELL = 1;
     const int SOLID_CELL = 2;
 
+    // 纯流体模式的可配置时间步参数
+    struct FluidStepConfig {
+        int   numSubSteps       = 1;     // 每帧的子步数
+        int   numParticleIters  = 5;     // 粒子分离迭代次数 (O(n) 借助哈希表)
+        int   numPressureIters  = 30;    // 压力求解迭代次数
+        bool  separateParticles = true;  // 是否启用粒子分离
+        float overRelaxation    = 1.9f;  // 超松弛因子
+        bool  compensateDrift   = false; // 是否补偿漂移
+    };
+
     struct FluidSimulator {
         // ==================== 粒子数据 ====================
         std::vector<glm::vec3> m_particlePos;   // 粒子位置 (世界坐标, 范围 [-0.5, 0.5])
@@ -109,7 +119,7 @@ namespace VCX::MainScene {
         glm::vec3 SampleVelocityPIC(glm::vec3 const & p) const;
 
         // 纯流体模式的可配置时间步
-        //void SimulateTimestep(float dt, FluidStepConfig const & cfg);
+        void SimulateTimestep(float dt, FluidStepConfig const & cfg);
 
     private:
         // ==================== 辅助函数 ====================
