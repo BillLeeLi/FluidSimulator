@@ -6,6 +6,8 @@
 
 namespace VCX::MainScene {
 
+    // ==================== 辅助函数 ====================
+
     int FluidSimulator::index2GridOffset(glm::ivec3 idx) const {
         return idx.x * (m_iCellY * m_iCellZ) + idx.y * m_iCellZ + idx.z;
     }
@@ -16,14 +18,6 @@ namespace VCX::MainScene {
 
     int FluidSimulator::clampCoord(int v, int lo, int hi) {
         return std::max(lo, std::min(v, hi));
-    }
-
-    glm::ivec3 FluidSimulator::worldToSlot(glm::vec3 const & p) const {
-        glm::vec3 g = (p + glm::vec3(0.5f)) * m_fInvSpacing;
-        return glm::ivec3(
-            clampSlot(static_cast<int>(std::floor(g.x)), m_iCellX - 1),
-            clampSlot(static_cast<int>(std::floor(g.y)), m_iCellY - 1),
-            clampSlot(static_cast<int>(std::floor(g.z)), m_iCellZ - 1));
     }
 
     float FluidSimulator::weight(glm::vec3 gridPos, glm::vec3 partPos) const {
@@ -43,7 +37,7 @@ namespace VCX::MainScene {
         std::fill(m_hashtableindex.begin(), m_hashtableindex.end(), 0);
         // 1. 统计每个格点中的粒子数
         for (int p = 0; p < m_iNumSpheres; ++p) {
-            glm::ivec3 slot   = worldToSlot(m_particlePos[p]);
+            glm::ivec3 slot   = worldToCell(m_particlePos[p]);
             m_particleSlot[p] = slot;
             int const id      = index2GridOffset(slot);
             ++m_hashtableindex[id + 1];
@@ -76,6 +70,8 @@ namespace VCX::MainScene {
         }
         return m_s[index2GridOffset(glm::ivec3(i, j, k))] > 0.5f;
     }
+
+    // ==================== 公共接口 =====================
 
     void FluidSimulator::integrateParticles(float timeStep) {
         for (int i = 0; i < m_iNumSpheres; i++) {
@@ -335,7 +331,7 @@ namespace VCX::MainScene {
                 for (int k = 0; k < m_iCellZ; ++k) {
                     int const       id         = index2GridOffset(glm::ivec3(i, j, k));
                     glm::vec3 const gridPos    = glm::vec3(i, j, k) * m_h + glm::vec3(-0.5f);
-                    glm::ivec3      centerSlot = worldToSlot(gridPos);
+                    glm::ivec3      centerSlot = worldToCell(gridPos);
 
                     // 在3×3×3邻域格点中搜索粒子
                     int i0 = clampSlot(centerSlot.x - 1, m_iCellX - 1);
@@ -510,7 +506,7 @@ namespace VCX::MainScene {
             if (pressureWeight > 1e-6f) {
                 p = pressureSum / pressureWeight;
             } else {
-                int const centerId = index2GridOffset(worldToSlot(m_particlePos[i]));
+                int const centerId = index2GridOffset(worldToCell(m_particlePos[i]));
                 if (m_type[centerId] == FLUID_CELL) {
                     p = m_p[centerId];
                 } else {
@@ -614,8 +610,6 @@ namespace VCX::MainScene {
         }
 
         // 设置网格固体标记: 水槽壁厚为1个格点
-        int n = m_iCellY * m_iCellZ;
-        int m = m_iCellZ;
         for (int i = 0; i < m_iCellX; i++) {
             for (int j = 0; j < m_iCellY; j++) {
                 for (int k = 0; k < m_iCellZ; k++) {
@@ -624,7 +618,7 @@ namespace VCX::MainScene {
                         || j == 0 || j == m_iCellY - 1
                         || k == 0 || k == m_iCellZ - 1)
                         s = 0.0f; // 边界固体
-                    m_s[i * n + j * m + k] = s;
+                    m_s[index2GridOffset(glm::ivec3(i, j, k))] = s;
                 }
             }
         }
@@ -640,5 +634,60 @@ namespace VCX::MainScene {
             }
         }
     }
+
+    int FluidSimulator::GridIndex(glm::ivec3 idx) const {
+        return index2GridOffset(idx);
+    }
+
+    bool FluidSimulator::IsInsideGrid(glm::ivec3 idx) const {
+        return (idx.x >= 0 && idx.x < m_iCellX) && (idx.y >= 0 && idx.y < m_iCellY) && (idx.z >= 0 && idx.z < m_iCellZ);
+    }
+
+    glm::ivec3 FluidSimulator::worldToCell(glm::vec3 const & p) const {
+        glm::vec3 g = (p + glm::vec3(0.5f)) * m_fInvSpacing;
+        return glm::ivec3(
+            clampSlot(static_cast<int>(std::floor(g.x)), m_iCellX - 1),
+            clampSlot(static_cast<int>(std::floor(g.y)), m_iCellY - 1),
+            clampSlot(static_cast<int>(std::floor(g.z)), m_iCellZ - 1));
+    }
+
+    glm::vec3 FluidSimulator::CellCenter(glm::ivec3 idx) const {
+        return (glm::vec3(idx) + glm::vec3(0.5f)) * m_h - glm::vec3(0.5f);
+    }
+
+    void FluidSimulator::ResetSolidMaskToTank() {
+        for (int i = 0; i < m_iCellX; i++) {
+            for (int j = 0; j < m_iCellY; j++) {
+                for (int k = 0; k < m_iCellZ; k++) {
+                    m_s[index2GridOffset(glm::ivec3(i, j, k))] = 0.0f;
+                }
+            }
+        }
+    }
+
+    void FluidSimulator::SetCellSolid(glm::ivec3 idx, bool solid) {
+        if (IsInsideGrid(idx)) {
+            m_s[index2GridOffset(idx)] = solid ? 0.0f : 1.0f;
+        }
+    }
+
+    bool FluidSimulator::IsCellSolid(glm::ivec3 idx) const {
+        if (IsInsideGrid(idx)) {
+            return m_s[index2GridOffset(idx)] <= 0.5f;
+        }
+        return true; // 网格外视为固体
+    }
+
+    float FluidSimulator::SamplePressure(glm::vec3 const & p) const {
+        return 0.0f; // make linker happy
+    }
+
+    glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p) const {
+        return glm::vec3(0.0f); // make linker happy
+    }
+
+    //void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
+    //    return glm::vec3(0.0f); // make linker happy
+    //}
 
 } // namespace VCX::MainScene

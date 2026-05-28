@@ -77,8 +77,39 @@ namespace VCX::MainScene {
         // Step 7: 更新粒子颜色 — 根据压力大小着色 (蓝→青→红)
         void updateParticleColors();
 
-        // ==================== 场景初始化 ====================
+        // 场景初始化
         void setupScene(int res);
+
+        // 将3D网格索引->线性数组偏移
+        int GridIndex(glm::ivec3 idx) const;
+
+        // 判断网格索引是否越界
+        bool IsInsideGrid(glm::ivec3 idx) const;
+
+        // 世界坐标 → 网格点索引
+        glm::ivec3 worldToCell(glm::vec3 const & p) const;
+
+        // 网格索引 -> 世界坐标 (格点中心)
+        glm::vec3 CellCenter(glm::ivec3 idx) const;
+
+        // 重置`m_s`，只保留水槽六面体为固体
+        void ResetSolidMaskToTank();
+
+        // 设置固体Cell
+        void SetCellSolid(glm::ivec3 idx, bool solid);
+
+        // 查看Cell类型，用于调试和边界判断
+        // 网格外视为固体
+        bool IsCellSolid(glm::ivec3 idx) const;
+
+        // 从压力网格`m_p`三线性插值采样流体速度
+        float SamplePressure(glm::vec3 const & p) const;
+
+        // 从MAC网格`m_vel`插值采样流体速度
+        glm::vec3 SampleVelocityPIC(glm::vec3 const & p) const;
+
+        // 纯流体模式的可配置时间步
+        //void SimulateTimestep(float dt, FluidStepConfig const & cfg);
 
     private:
         // ==================== 辅助函数 ====================
@@ -91,9 +122,6 @@ namespace VCX::MainScene {
 
         // 将值钳制到 [lo, hi]
         static int clampCoord(int v, int lo, int hi);
-
-        // 世界坐标 → 网格点索引
-        glm::ivec3 worldToSlot(glm::vec3 const & p) const;
 
         // 线性B样条核函数: 三个轴的 (1-|d|) 乘积, |d|>=1 时返回0
         // 速度快, 无需sqrt, 支持范围为1个网格间距
