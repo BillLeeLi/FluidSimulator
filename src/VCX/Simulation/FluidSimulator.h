@@ -106,7 +106,7 @@ namespace VCX::MainScene {
         float SamplePressure(glm::vec3 const & p) const;
 
         // 从MAC网格`m_vel`插值采样流体速度
-        glm::vec3 SampleVelocityPIC(glm::vec3 const & p) const;
+        glm::vec3 SampleVelocityPIC(glm::vec3 const & p, glm::vec3 fallback) const;
 
         // 纯流体模式的可配置时间步
         //void SimulateTimestep(float dt, FluidStepConfig const & cfg);

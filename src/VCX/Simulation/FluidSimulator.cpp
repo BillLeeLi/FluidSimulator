@@ -170,7 +170,6 @@ namespace VCX::MainScene {
         if (toGrid) {
             // ============ P2G: 粒子 → 网格 ============
 
-            // 保存当前网格速度用于FLIP增量
             std::fill(m_vel.begin(), m_vel.end(), glm::vec3(0.0f));
             for (int d = 0; d < 3; ++d)
                 std::fill(m_near_num[d].begin(), m_near_num[d].end(), 0.0f);
@@ -310,7 +309,7 @@ namespace VCX::MainScene {
                 pic_vel.x = sampleVelocity(px, 0, false, oldVel.x);
                 pic_vel.y = sampleVelocity(py, 1, false, oldVel.y);
                 pic_vel.z = sampleVelocity(pz, 2, false, oldVel.z);
-
+                
                 // FLIP: 旧速度 + 网格速度变化量 (非耗散但可能有噪声)
                 glm::vec3 flip_vel = oldVel;
                 flip_vel.x += sampleVelocity(px, 0, true, 0.0f);
@@ -465,7 +464,7 @@ namespace VCX::MainScene {
             maxPressure = std::max(maxPressure, std::abs(m_p[id]));
 
         for (int i = 0; i < m_iNumSpheres; ++i) {
-            float p = SamplePressure(m_particlePos[i]);
+            float p            = SamplePressure(m_particlePos[i]);
             float t            = std::abs(p) / maxPressure;
             m_particleColor[i] = ramp(t);
         }
@@ -615,7 +614,7 @@ namespace VCX::MainScene {
     float FluidSimulator::SamplePressure(glm::vec3 const & p) const {
         if (m_iNumCells <= 0 || m_p.empty() || m_type.empty()) return 0.0f;
 
-        glm::vec3 const gRaw = (p + glm::vec3(0.5f)) * m_fInvSpacing - glm::vec3(0.5f);
+        glm::vec3 const gRaw = (p + glm::vec3(0.5f)) * m_fInvSpacing - glm::vec3(0.5f); // m_p以cell中心为采样点，所以需要偏移0.5个格点
         glm::vec3 const g(
             glm::clamp(gRaw.x, 0.0f, float(m_iCellX - 1)),
             glm::clamp(gRaw.y, 0.0f, float(m_iCellY - 1)),
@@ -639,9 +638,7 @@ namespace VCX::MainScene {
             if (m_type[id] == FLUID_CELL) return m_p[id];
             if (m_type[id] == EMPTY_CELL) return 0.0f;
 
-            // Solid cell: use a local ghost-pressure extrapolation consistent with
-            // a zero-normal-gradient (Neumann) wall condition by borrowing the
-            // nearest neighboring fluid pressure.
+            // 对固体单元格使用Neumann条件dp/dn=0的局部压力外推，借用最近的流体单元压力作为该单元压力
             float bestPressure = 0.0f;
             float bestDist2    = std::numeric_limits<float>::max();
             bool  foundFluid   = false;
@@ -658,7 +655,7 @@ namespace VCX::MainScene {
                         if (m_type[neighborId] != FLUID_CELL) continue;
 
                         glm::vec3 const neighborCenter = CellCenter(neighbor);
-                        float const dist2 = glm::dot(neighborCenter - p, neighborCenter - p);
+                        float const     dist2          = glm::dot(neighborCenter - p, neighborCenter - p);
                         if (dist2 < bestDist2) {
                             bestDist2    = dist2;
                             bestPressure = m_p[neighborId];
@@ -689,12 +686,63 @@ namespace VCX::MainScene {
         return glm::mix(c0, c1, fz);
     }
 
-    glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p) const {
-        return glm::vec3(0.0f); // make linker happy
+    glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p, glm::vec3 fallback=glm::vec3(0.0f)) const {
+        auto sampleVelocity = [&](glm::vec3 samplePos, int dir, float fallback) -> float {
+            // 直接转换到网格坐标 (调用者已预处理偏移)
+            glm::vec3 gridPos = (samplePos + glm::vec3(0.5f)) * m_fInvSpacing;
+
+            // 钳制到有效插值范围
+            gridPos.x = std::max(0.0f, std::min(gridPos.x, float(m_iCellX - 1) - 1e-4f));
+            gridPos.y = std::max(0.0f, std::min(gridPos.y, float(m_iCellY - 1) - 1e-4f));
+            gridPos.z = std::max(0.0f, std::min(gridPos.z, float(m_iCellZ - 1) - 1e-4f));
+
+            int   i0 = static_cast<int>(std::floor(gridPos.x));
+            int   j0 = static_cast<int>(std::floor(gridPos.y));
+            int   k0 = static_cast<int>(std::floor(gridPos.z));
+            float fx = gridPos.x - i0;
+            float fy = gridPos.y - j0;
+            float fz = gridPos.z - k0;
+
+            float accum = 0.0f;
+            float wsum  = 0.0f;
+            for (int di = 0; di <= 1; ++di) {
+                float wx = di ? fx : (1.0f - fx);
+                for (int dj = 0; dj <= 1; ++dj) {
+                    float wy = dj ? fy : (1.0f - fy);
+                    for (int dk = 0; dk <= 1; ++dk) {
+                        float      wz = dk ? fz : (1.0f - fz);
+                        glm::ivec3 idx(i0 + di, j0 + dj, k0 + dk);
+                        if (! isValidVelocity(idx.x, idx.y, idx.z, dir)) continue;
+                        int   id  = index2GridOffset(idx);
+                        float w   = wx * wy * wz;
+                        float val = m_vel[id][dir];
+                        accum += w * val;
+                        wsum += w;
+                    }
+                }
+            }
+            return (wsum > 1e-6f) ? (accum / wsum) : fallback;
+        };
+
+        // 将粒子位置偏移到交错面上的对应位置:
+        // x-速度面 u 位于 (i, j+1/2, k+1/2) → 偏移 (0, -0.5h, -0.5h)
+        // y-速度面 v 位于 (i+1/2, j, k+1/2) → 偏移 (-0.5h, 0, -0.5h)
+        // z-速度面 w 位于 (i+1/2, j+1/2, k) → 偏移 (-0.5h, -0.5h, 0)
+        glm::vec3 const px = p + glm::vec3(0.0f, -0.5f, -0.5f) * m_h;
+        glm::vec3 const py = p + glm::vec3(-0.5f, 0.0f, -0.5f) * m_h;
+        glm::vec3 const pz = p + glm::vec3(-0.5f, -0.5f, 0.0f) * m_h;
+
+        // PIC: 直接从网格插值得到新速度 (耗散但稳定)
+        glm::vec3 pic_vel;
+        pic_vel.x = sampleVelocity(px, 0, fallback.x);
+        pic_vel.y = sampleVelocity(py, 1, fallback.y);
+        pic_vel.z = sampleVelocity(pz, 2, fallback.z);
+   
+        return pic_vel;
     }
 
-    //void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
-    //    return glm::vec3(0.0f); // make linker happy
-    //}
+    // void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
+    //     return glm::vec3(0.0f); // make linker happy
+    // }
 
 } // namespace VCX::MainScene
