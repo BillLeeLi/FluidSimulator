@@ -686,8 +686,8 @@ namespace VCX::MainScene {
         return glm::mix(c0, c1, fz);
     }
 
-    glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p, glm::vec3 fallback=glm::vec3(0.0f)) const {
-        auto sampleVelocity = [&](glm::vec3 samplePos, int dir, float fallback) -> float {
+    glm::vec3 FluidSimulator::SampleVelocityPIC(glm::vec3 const & p) const {
+        auto sampleVelocity = [&](glm::vec3 samplePos, int dir) -> float {
             // 直接转换到网格坐标 (调用者已预处理偏移)
             glm::vec3 gridPos = (samplePos + glm::vec3(0.5f)) * m_fInvSpacing;
 
@@ -721,7 +721,7 @@ namespace VCX::MainScene {
                     }
                 }
             }
-            return (wsum > 1e-6f) ? (accum / wsum) : fallback;
+            return (wsum > 1e-6f) ? (accum / wsum) : accum;
         };
 
         // 将粒子位置偏移到交错面上的对应位置:
@@ -734,9 +734,9 @@ namespace VCX::MainScene {
 
         // PIC: 直接从网格插值得到新速度 (耗散但稳定)
         glm::vec3 pic_vel;
-        pic_vel.x = sampleVelocity(px, 0, fallback.x);
-        pic_vel.y = sampleVelocity(py, 1, fallback.y);
-        pic_vel.z = sampleVelocity(pz, 2, fallback.z);
+        pic_vel.x = sampleVelocity(px, 0);
+        pic_vel.y = sampleVelocity(py, 1);
+        pic_vel.z = sampleVelocity(pz, 2);
    
         return pic_vel;
     }
