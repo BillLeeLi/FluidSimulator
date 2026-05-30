@@ -83,6 +83,11 @@ namespace VCX::MainScene {
             if (_separateParticles)
                 _fluid.pushParticlesApart(_numParticleIters);
             _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            if (_fluid.enableSurfaceModeling) {
+                _fluid.updateSurfaceField();
+                _fluid.computeSurfaceGeometry();
+                _fluid.applySurfaceTension(sdt);
+            }
             _fluid.transferVelocities(true, flipRatio);
             _fluid.updateParticleDensity();
             _fluid.solveIncompressibility(_numPressureIters, sdt, _overRelaxation, _compensateDrift);

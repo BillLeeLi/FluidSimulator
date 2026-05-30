@@ -60,6 +60,20 @@ namespace VCX::MainScene {
         std::vector<float> m_particleDensity;            // 每个格点的核密度估计
         float              m_particleRestDensity = 1.0f; // 静止密度 (初始化时估算)
 
+        // ==================== 流体表面建模 ====================
+        std::vector<float>     m_surfacePhi;       // 近似 signed distance（不保证梯度大小为1），只在表面窄带内可靠
+        std::vector<float>     m_surfaceColor;     // 标量场c(x)，表示x附近的粒子加权数量（越小越接近流体表面）
+        std::vector<glm::vec3> m_surfaceNormal;    // 表面法线
+        std::vector<float>     m_surfaceCurvature; // 表面曲率
+
+        bool  enableSurfaceModeling = true;  // 是否启用表面建模
+        float m_surfaceTension      = 0.02f; // 表面张力系数
+        float m_surfaceIsoValue     = 0.5f;  // 自由表面等值面阈值，意思是m_surfaceColor=m_surfaceIsoValue的地方被认为是表面
+        float m_surfaceKernelRadius = 0.0f;  // 表面建模核半径.默认值2*m_h
+        float m_surfaceRestField    = 0.0f;  // m_surfaceColor的参考值，用于归一化(在第一次被使用时取为全部液体cell的color均值)
+        float m_surfaceBandWidth    = 0.0f;  // 表面窄带宽度，表面张力只施加在|phi|<bandWidth的范围内.默认值2*m_h
+        float m_surfaceCurvatureMax = 0.0f;  // 最大曲率 (用于限制过大曲率引起的数值不稳定).默认值1/m_h
+
         glm::vec3 gravity { 0, -9.81f, 0 };
 
         // ==================== 核心模拟函数 ====================
@@ -83,6 +97,10 @@ namespace VCX::MainScene {
 
         // Step 6: 求解不可压性 — 使用Gauss-Seidel迭代驱散速度散度
         void solveIncompressibility(int numIters, float dt, float overRelaxation, bool compensateDrift);
+
+        void updateSurfaceField();
+        void computeSurfaceGeometry();
+        void applySurfaceTension(float dt);
 
         // Step 7: 更新粒子颜色 — 根据压力大小着色 (蓝→青→红)
         void updateParticleColors();
