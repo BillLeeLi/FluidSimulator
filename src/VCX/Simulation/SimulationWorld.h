@@ -68,7 +68,7 @@ namespace VCX::MainScene {
         float _lastSimTimeMs { 0.0f };
 
         int _selectedRigidBody { 0 };
-        float _rigidKeyboardForce { 8.0f };
+        float _rigidKeyboardForce { 30.0f };
         RigidBodyPreset _rigidBodyPreset { RigidBodyPreset::FluidCouplingMixed };
     };
 

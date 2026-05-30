@@ -217,6 +217,58 @@ namespace VCX::MainScene {
     void RigidBodySystem::SetupDefaultScene(RigidBodyPreset preset) {
         Clear();
 
+        // These values are copied from the stable stacking setting in Lab1.
+        // Compared with the earlier Lab4 version, the higher substep/iteration count,
+        // contact sorting, alternating sweep, and resting stabilization are the main
+        // reasons why objects do not keep shaking while resting on a static surface.
+        Substeps                     = 16;
+        ImpulseIterations            = 34;
+        LinearDamping                = 0.01f;
+        AngularDamping               = 0.015f;
+        RestitutionVelocityThreshold = 0.5f;
+        PositionCorrectionPercent    = 0.82f;
+        PositionCorrectionSlop       = 0.0005f;
+        EnableFriction               = true;
+        SortContactsForStability     = true;
+        EnableRestingStabilization   = true;
+        AlternateIterationSweep      = true;
+        UseSequentialImpulseCaching  = true;
+        RestingLinearThreshold       = 0.008f;
+        RestingAngularThreshold      = 0.015f;
+
+        auto addTankWall = [&](std::string name, Eigen::Vector3f const & dim, Eigen::Vector3f const & x) {
+            RigidBody wall;
+            wall.name        = std::move(name);
+            wall.shape       = RigidBodyShape::Box;
+            wall.dim         = dim;
+            wall.x           = x;
+            wall.mass        = 1.0f;
+            wall.isStatic    = true;
+            wall.useGravity  = false;
+            wall.restitution = 0.0f;
+            wall.friction    = 0.95f;
+            wall.color       = Eigen::Vector3f(0.36f, 0.38f, 0.43f);
+            AddBody(wall);
+        };
+
+        auto addLab1StyleTankBoundary = [&]() {
+            float constexpr inner = 0.43f;
+            float constexpr thick = 0.08f;
+            float constexpr span  = 1.08f;
+            float constexpr c     = inner + 0.5f * thick;
+
+            // Six static walls are used only for rigid-body collision response.
+            // They are handled by the same FCL + sequential impulse pipeline as Lab1,
+            // instead of a separate AABB post-correction.  This is the key change that
+            // reduces the resting jitter seen against the tank frame.
+            addTankWall("tank_neg_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f(-c, 0.0f, 0.0f));
+            addTankWall("tank_pos_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f( c, 0.0f, 0.0f));
+            addTankWall("tank_neg_y", Eigen::Vector3f(span,  thick, span), Eigen::Vector3f(0.0f, -c, 0.0f));
+            addTankWall("tank_pos_y", Eigen::Vector3f(span,  thick, span), Eigen::Vector3f(0.0f,  c, 0.0f));
+            addTankWall("tank_neg_z", Eigen::Vector3f(span,  span,  thick), Eigen::Vector3f(0.0f, 0.0f, -c));
+            addTankWall("tank_pos_z", Eigen::Vector3f(span,  span,  thick), Eigen::Vector3f(0.0f, 0.0f,  c));
+        };
+
         // The Lab4 fluid tank is currently [-0.5, 0.5]^3.  These presets keep the
         // Lab1 rigid-body method, but scale the demos down so that they can later
         // be rasterized into the fluid grid for solid-fluid coupling.
@@ -251,6 +303,7 @@ namespace VCX::MainScene {
             b.useGravity  = false;
             b.color       = Eigen::Vector3f(0.58f, 0.72f, 0.95f);
             AddBody(b);
+            addLab1StyleTankBoundary();
             break;
         }
         case RigidBodyPreset::MixedStack: {
@@ -286,6 +339,7 @@ namespace VCX::MainScene {
                 }
                 AddBody(body);
             }
+            addLab1StyleTankBoundary();
             break;
         }
         case RigidBodyPreset::FluidCouplingMixed:
@@ -328,6 +382,7 @@ namespace VCX::MainScene {
             obstacle.friction    = 0.80f;
             obstacle.color       = Eigen::Vector3f(0.50f, 0.85f, 0.62f);
             AddBody(obstacle);
+            addLab1StyleTankBoundary();
             break;
         }
         }
@@ -388,6 +443,76 @@ namespace VCX::MainScene {
         if (! IsValidBody(id)) return Eigen::Vector3f::Zero();
         auto const & b = Bodies[id];
         return b.v + b.w.cross(worldPoint - b.x);
+    }
+
+
+    void RigidBodySystem::CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const {
+        if (! IsValidBody(bodyId)) return;
+        auto const & body = Bodies[bodyId];
+
+        int const n = std::max(1, samplesPerAxis);
+        Eigen::Matrix3f const R = body.GetRotationMatrix();
+
+        if (body.shape == RigidBodyShape::Sphere) {
+            float const radius = 0.5f * body.dim.x();
+            int const sampleCount = std::max(12, 6 * n * n);
+            float const area = 4.0f * 3.14159265358979323846f * radius * radius / static_cast<float>(sampleCount);
+            float const goldenAngle = 3.14159265358979323846f * (3.0f - std::sqrt(5.0f));
+
+            for (int i = 0; i < sampleCount; ++i) {
+                float const y = 1.0f - 2.0f * (float(i) + 0.5f) / float(sampleCount);
+                float const r = std::sqrt(std::max(0.0f, 1.0f - y * y));
+                float const theta = goldenAngle * float(i);
+                Eigen::Vector3f const localNormal(r * std::cos(theta), y, r * std::sin(theta));
+                Eigen::Vector3f const normal = SafeNormalized(R * localNormal);
+
+                RigidSurfaceSample sample;
+                sample.bodyId   = bodyId;
+                sample.normal   = normal;
+                sample.position = body.x + radius * normal;
+                sample.area     = area;
+                samples.push_back(sample);
+            }
+            return;
+        }
+
+        Eigen::Vector3f const half = 0.5f * body.dim;
+        auto emitFace = [&](int axis, float sign) {
+            int const uAxis = (axis + 1) % 3;
+            int const vAxis = (axis + 2) % 3;
+            float const faceArea = body.dim[uAxis] * body.dim[vAxis];
+            float const sampleArea = faceArea / float(n * n);
+
+            Eigen::Vector3f localNormal = Eigen::Vector3f::Zero();
+            localNormal[axis] = sign;
+            Eigen::Vector3f const worldNormal = SafeNormalized(R * localNormal);
+
+            for (int iu = 0; iu < n; ++iu) {
+                for (int iv = 0; iv < n; ++iv) {
+                    float const fu = (float(iu) + 0.5f) / float(n) * 2.0f - 1.0f;
+                    float const fv = (float(iv) + 0.5f) / float(n) * 2.0f - 1.0f;
+
+                    Eigen::Vector3f localPoint = Eigen::Vector3f::Zero();
+                    localPoint[axis]  = sign * half[axis];
+                    localPoint[uAxis] = fu * half[uAxis];
+                    localPoint[vAxis] = fv * half[vAxis];
+
+                    RigidSurfaceSample sample;
+                    sample.bodyId   = bodyId;
+                    sample.position = body.LocalToWorld(localPoint);
+                    sample.normal   = worldNormal;
+                    sample.area     = sampleArea;
+                    samples.push_back(sample);
+                }
+            }
+        };
+
+        emitFace(0,  1.0f);
+        emitFace(0, -1.0f);
+        emitFace(1,  1.0f);
+        emitFace(1, -1.0f);
+        emitFace(2,  1.0f);
+        emitFace(2, -1.0f);
     }
 
     void RigidBodySystem::SetBodyMass(int id, float mass) {
@@ -669,17 +794,31 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::StabilizeRestingContacts() {
-        std::vector<int> contactCount(Bodies.size(), 0);
+        // Lab1 used resting stabilization to kill tiny jitter.  In this Lab4 tank,
+        // the bodies are much smaller; directly using Lab1 thresholds can freeze a
+        // box while it is still tilted.  Therefore we only allow sleeping when the
+        // body has enough static-wall/static-obstacle contacts and its residual
+        // velocity is very small.  A box on one corner/edge should keep rotating; a
+        // box lying on a face can sleep.
+        std::vector<int> staticContactCount(Bodies.size(), 0);
         for (auto const & c : Contacts) {
             if (c.penetration <= 0.0f) continue;
-            if (c.idA >= 0 && c.idA < static_cast<int>(Bodies.size()) && ! Bodies[c.idA].isStatic) ++contactCount[c.idA];
-            if (c.idB >= 0 && c.idB < static_cast<int>(Bodies.size()) && ! Bodies[c.idB].isStatic) ++contactCount[c.idB];
+            if (! IsValidBody(c.idA) || ! IsValidBody(c.idB)) continue;
+
+            RigidBody const & a = Bodies[c.idA];
+            RigidBody const & b = Bodies[c.idB];
+
+            if (! a.isStatic && b.isStatic) ++staticContactCount[c.idA];
+            if (! b.isStatic && a.isStatic) ++staticContactCount[c.idB];
         }
 
         for (int i = 0; i < static_cast<int>(Bodies.size()); ++i) {
             auto & b = Bodies[i];
             if (b.isStatic || ! b.useGravity) continue;
-            if (contactCount[i] == 0) continue;
+
+            int const requiredStaticContacts = (b.shape == RigidBodyShape::Box) ? 3 : 1;
+            if (staticContactCount[i] < requiredStaticContacts) continue;
+
             if (b.v.norm() < RestingLinearThreshold && b.w.norm() < RestingAngularThreshold) {
                 b.v.setZero();
                 b.w.setZero();
@@ -688,25 +827,62 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::ResolveTankBounds(float minBound, float maxBound) {
-        for (auto & b : Bodies) {
-            if (b.isStatic) continue;
+        bool hasLab1TankWalls = false;
+        for (auto const & body : Bodies) {
+            if (body.isStatic && body.name.rfind("tank_", 0) == 0) {
+                hasLab1TankWalls = true;
+                break;
+            }
+        }
 
-            auto const [mn, mx] = b.GetWorldAABB();
+        // When the Lab1-style tank walls exist, wall contacts are already solved by
+        // FCL + sequential impulses inside Step().  Running the old AABB correction
+        // afterwards would fight the contact solver and cause visible jitter, so this
+        // function becomes a very conservative safety net only.
+        if (hasLab1TankWalls) {
+            float const hardLimit = std::max(std::abs(minBound), std::abs(maxBound)) + 0.20f;
+            for (auto & body : Bodies) {
+                if (body.isStatic) continue;
+                bool escaped = false;
+                for (int axis = 0; axis < 3; ++axis) {
+                    if (body.x[axis] < -hardLimit) {
+                        body.x[axis] = -hardLimit;
+                        body.v[axis] = 0.0f;
+                        escaped = true;
+                    }
+                    if (body.x[axis] > hardLimit) {
+                        body.x[axis] = hardLimit;
+                        body.v[axis] = 0.0f;
+                        escaped = true;
+                    }
+                }
+                if (escaped) {
+                    body.w *= 0.5f;
+                }
+            }
+            return;
+        }
+
+        // Fallback for scenes without explicit tank wall bodies.  This keeps the old
+        // protective behavior, but it is not used by the default Lab4 rigid presets.
+        for (auto & body : Bodies) {
+            if (body.isStatic) continue;
+
+            auto const [mn, mx] = body.GetWorldAABB();
             Eigen::Vector3f correction = Eigen::Vector3f::Zero();
             for (int axis = 0; axis < 3; ++axis) {
                 if (mn[axis] < minBound) {
                     correction[axis] += minBound - mn[axis];
-                    if (b.v[axis] < 0.0f) b.v[axis] = -b.restitution * b.v[axis];
-                    b.w *= 0.75f;
+                    if (body.v[axis] < 0.0f) body.v[axis] = 0.0f;
                 }
                 if (mx[axis] > maxBound) {
                     correction[axis] -= mx[axis] - maxBound;
-                    if (b.v[axis] > 0.0f) b.v[axis] = -b.restitution * b.v[axis];
-                    b.w *= 0.75f;
+                    if (body.v[axis] > 0.0f) body.v[axis] = 0.0f;
                 }
             }
-            b.x += correction;
+            body.x += correction;
         }
     }
+
 
 } // namespace VCX::MainScene

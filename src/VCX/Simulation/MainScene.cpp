@@ -6,11 +6,21 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
+
+#include <imgui.h>
 
 namespace VCX::MainScene {
     namespace {
-        constexpr float kPi = 3.14159265358979323846f;
+        constexpr float kEps = 1e-6f;
+        constexpr float kPi  = 3.14159265358979323846f;
+
+        struct SphereMeshData {
+            std::vector<glm::vec3>     vertices;
+            std::vector<std::uint32_t> triIndices;
+            std::vector<std::uint32_t> lineIndices;
+        };
 
         const std::vector<glm::vec3> vertex_pos = {
             glm::vec3(-0.5f, -0.5f, -0.5f),
@@ -24,23 +34,143 @@ namespace VCX::MainScene {
         };
         const std::vector<std::uint32_t> line_index = { 0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7 };
 
-        std::array<std::uint32_t, 24> const kBoxLineIndex = {
+        const std::vector<std::uint32_t> kBoxLineIndex = {
             0, 1, 1, 2, 2, 3, 3, 0,
             4, 5, 5, 6, 6, 7, 7, 4,
             0, 4, 1, 5, 2, 6, 3, 7,
         };
 
-        glm::vec3 MakeSphereRingPoint(RigidBody const & body, int ring, int segment, int segmentCount) {
-            float const angle = 2.0f * kPi * float(segment) / float(segmentCount);
-            float const c = std::cos(angle);
-            float const s = std::sin(angle);
-            float const r = 0.5f * body.dim.x();
+        const std::vector<std::uint32_t> kBoxTriIndex = {
+            0, 1, 2, 0, 2, 3,
+            1, 0, 4, 1, 4, 5,
+            1, 5, 6, 1, 6, 2,
+            2, 6, 7, 2, 7, 3,
+            0, 3, 7, 0, 7, 4,
+            4, 7, 6, 4, 6, 5,
+        };
 
-            Eigen::Vector3f local;
-            if (ring == 0) local = Eigen::Vector3f(r * c, r * s, 0.0f);      // xy
-            else if (ring == 1) local = Eigen::Vector3f(r * c, 0.0f, r * s); // xz
-            else local = Eigen::Vector3f(0.0f, r * c, r * s);                // yz
-            return ToGlm(body.LocalToWorld(local));
+        SphereMeshData const & GetUnitRigidSphereMesh() {
+            static SphereMeshData mesh = []() {
+                SphereMeshData data;
+                int constexpr stacks = 10;
+                int constexpr slices = 20;
+
+                data.vertices.reserve((stacks + 1) * (slices + 1));
+                for (int stack = 0; stack <= stacks; ++stack) {
+                    float const v   = static_cast<float>(stack) / static_cast<float>(stacks);
+                    float const phi = kPi * v;
+                    float const y   = std::cos(phi);
+                    float const r   = std::sin(phi);
+                    for (int slice = 0; slice <= slices; ++slice) {
+                        float const u     = static_cast<float>(slice) / static_cast<float>(slices);
+                        float const theta = 2.0f * kPi * u;
+                        data.vertices.emplace_back(r * std::cos(theta), y, r * std::sin(theta));
+                    }
+                }
+
+                auto idx = [slices](int stack, int slice) -> std::uint32_t {
+                    return static_cast<std::uint32_t>(stack * (slices + 1) + slice);
+                };
+
+                for (int stack = 0; stack < stacks; ++stack) {
+                    for (int slice = 0; slice < slices; ++slice) {
+                        std::uint32_t const a = idx(stack, slice);
+                        std::uint32_t const b = idx(stack + 1, slice);
+                        std::uint32_t const c = idx(stack + 1, slice + 1);
+                        std::uint32_t const d = idx(stack, slice + 1);
+                        data.triIndices.insert(data.triIndices.end(), { a, b, c, a, c, d });
+                        data.lineIndices.insert(data.lineIndices.end(), { a, d, a, b });
+                    }
+                }
+                return data;
+            }();
+            return mesh;
+        }
+
+        Eigen::Vector3f SafeNormalized(Eigen::Vector3f const & v, Eigen::Vector3f const & fallback = Eigen::Vector3f::UnitZ()) {
+            float const n = v.norm();
+            return n > kEps ? (v / n) : fallback;
+        }
+
+        bool IntersectRayPlane(
+            Eigen::Vector3f const & rayOrigin,
+            Eigen::Vector3f const & rayDir,
+            Eigen::Vector3f const & planePoint,
+            Eigen::Vector3f const & planeNormal,
+            Eigen::Vector3f &       hitPoint) {
+            float const denom = planeNormal.dot(rayDir);
+            if (std::abs(denom) < kEps) return false;
+            float const t = planeNormal.dot(planePoint - rayOrigin) / denom;
+            if (t < 0.0f) return false;
+            hitPoint = rayOrigin + t * rayDir;
+            return true;
+        }
+
+        bool IntersectRayOBB(
+            Eigen::Vector3f const & rayOrigin,
+            Eigen::Vector3f const & rayDir,
+            RigidBody const &       body,
+            float &                 tHit,
+            Eigen::Vector3f &       hitPoint) {
+            Eigen::Matrix3f const R      = body.GetRotationMatrix();
+            Eigen::Matrix3f const invRot = R.transpose();
+            Eigen::Vector3f const half   = 0.5f * body.dim;
+
+            Eigen::Vector3f const localOrigin = invRot * (rayOrigin - body.x);
+            Eigen::Vector3f const localDir    = invRot * rayDir;
+
+            float tMin = 0.0f;
+            float tMax = std::numeric_limits<float>::max();
+
+            for (int axis = 0; axis < 3; ++axis) {
+                float const o = localOrigin[axis];
+                float const d = localDir[axis];
+                float const h = half[axis];
+                if (std::abs(d) < kEps) {
+                    if (o < -h || o > h) return false;
+                    continue;
+                }
+
+                float t1 = (-h - o) / d;
+                float t2 = ( h - o) / d;
+                if (t1 > t2) std::swap(t1, t2);
+                tMin = std::max(tMin, t1);
+                tMax = std::min(tMax, t2);
+                if (tMin > tMax) return false;
+            }
+
+            if (tMax < 0.0f) return false;
+            tHit     = tMin >= 0.0f ? tMin : tMax;
+            hitPoint = rayOrigin + tHit * rayDir;
+            return true;
+        }
+
+
+        bool IsInternalTankBoundary(RigidBody const & body) {
+            return body.isStatic && body.name.rfind("tank_", 0) == 0;
+        }
+
+        bool IntersectRaySphere(
+            Eigen::Vector3f const & rayOrigin,
+            Eigen::Vector3f const & rayDir,
+            RigidBody const &       body,
+            float &                 tHit,
+            Eigen::Vector3f &       hitPoint) {
+            float const           r    = 0.5f * body.dim.x();
+            Eigen::Vector3f const oc   = rayOrigin - body.x;
+            float const           b    = oc.dot(rayDir);
+            float const           c    = oc.dot(oc) - r * r;
+            float const           disc = b * b - c;
+            if (disc < 0.0f) return false;
+
+            float const sqrtDisc = std::sqrt(disc);
+            float       t0       = -b - sqrtDisc;
+            float       t1       = -b + sqrtDisc;
+            if (t1 < 0.0f) return false;
+
+            tHit     = t0 >= 0.0f ? t0 : t1;
+            hitPoint = rayOrigin + tHit * rayDir;
+            return true;
         }
     } // namespace
 
@@ -147,15 +277,30 @@ namespace VCX::MainScene {
                 body.x = ToEigen(pos);
             }
 
+            glm::vec3 color = ToGlm(body.color);
+            if (ImGui::ColorEdit3("Rigid Color", &color.x)) {
+                body.color = ToEigen(color);
+            }
+
             ImGui::Text("Velocity: %.3f %.3f %.3f", body.v.x(), body.v.y(), body.v.z());
             ImGui::Text("Angular Vel: %.3f %.3f %.3f", body.w.x(), body.w.y(), body.w.z());
         }
 
-        float keyboardForce = _world.RigidKeyboardForce();
-        if (ImGui::SliderFloat("Keyboard Force", &keyboardForce, 0.0f, 30.0f)) {
-            _world.SetRigidKeyboardForce(keyboardForce);
+        float pointForce = _world.RigidKeyboardForce();
+        if (ImGui::SliderFloat("Lab1 F Point Force", &pointForce, 1.0f, 160.0f)) {
+            _world.SetRigidKeyboardForce(pointForce);
         }
-        ImGui::TextWrapped("Move selected rigid body: J/L = X, U/O = Y, I/K = Z. Q/E applies yaw torque. This is the rigid-body part; fluid-solid coupling can use the same bodies later.");
+
+        ImGui::Checkbox("Draw Rigid Solid", &_drawRigidSolid);
+        ImGui::Checkbox("Draw Rigid Wireframe", &_drawRigidWireframe);
+        ImGui::Checkbox("Show Rigid Contacts", &_showRigidContacts);
+        ImGui::SliderFloat("Rigid Line Width", &_rigidLineWidth, 1.0f, 4.0f);
+        ImGui::SliderFloat("Contact Point Size", &_rigidPointSize, 2.0f, 16.0f);
+
+        ImGui::TextWrapped("Lab1 interaction: hover a dynamic rigid body and hold F to apply a point force along the view ray at the hit point.  Hold Alt + left mouse and drag a dynamic body to reposition it on a camera-facing plane.");
+        if (_hoverHasHit) {
+            ImGui::Text("Hover Body: %d", _hoverRigidBodyId);
+        }
     }
 
     Common::CaseRenderResult MainScene::OnRender(std::pair<std::uint32_t, std::uint32_t> const desiredSize) {
@@ -167,12 +312,12 @@ namespace VCX::MainScene {
             _cameraManager.Save(_sceneObject.Camera);
         }
 
-        ApplyRigidBodyKeyboardControls();
-        if (! _stopped)
+        if (! _stopped) {
+            ApplyRigidBodyLab1Controls();
             _world.StepFrame(ImGui::GetIO().DeltaTime);
+        }
 
         _BoundaryItem.UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(vertex_pos));
-        UpdateRigidBodyRenderItem();
         _frame.Resize(desiredSize);
 
         _cameraManager.Update(_sceneObject.Camera);
@@ -211,11 +356,62 @@ namespace VCX::MainScene {
                 fluid.m_iNumSpheres);
         }
 
-        if (_rigidBodyLineItem && ! _world.GetRigidBodies().Bodies.empty()) {
-            glLineWidth(2.0f);
-            _lineprogram.GetUniforms().SetByName("u_Color", glm::vec3(1.0f, 0.86f, 0.25f));
-            _rigidBodyLineItem->Draw({ _lineprogram.Use() });
-            glLineWidth(1.0f);
+        auto const & bodies = _world.GetRigidBodies().Bodies;
+        for (int i = 0; i < static_cast<int>(bodies.size()); ++i) {
+            auto const & body = bodies[i];
+            if (IsInternalTankBoundary(body)) continue; // the visible white fluid frame already represents the tank
+
+            bool const selected = (i == _world.SelectedRigidBody());
+            bool const hovered  = (_hoverHasHit && i == _hoverRigidBodyId);
+
+            if (body.shape == RigidBodyShape::Box) {
+                auto verts = GetRigidBoxVertices(body);
+                auto span  = Engine::make_span_bytes<glm::vec3>(verts);
+
+                if (_drawRigidSolid && _rigidBoxItem) {
+                    _lineprogram.GetUniforms().SetByName("u_Color", ToGlm(body.color));
+                    _rigidBoxItem->UpdateVertexBuffer("position", span);
+                    _rigidBoxItem->Draw({ _lineprogram.Use() });
+                }
+                if (_drawRigidWireframe && _rigidBoxLineItem) {
+                    glm::vec3 lineColor = body.isStatic ? glm::vec3(0.90f, 0.90f, 0.90f) : glm::vec3(1.0f, 1.0f, 1.0f);
+                    if (selected && ! body.isStatic) lineColor = glm::vec3(1.0f, 0.95f, 0.20f);
+                    if (hovered && ! body.isStatic) lineColor = glm::vec3(0.20f, 1.0f, 0.35f);
+                    _lineprogram.GetUniforms().SetByName("u_Color", lineColor);
+                    glLineWidth(_rigidLineWidth);
+                    _rigidBoxLineItem->UpdateVertexBuffer("position", span);
+                    _rigidBoxLineItem->Draw({ _lineprogram.Use() });
+                    glLineWidth(1.0f);
+                }
+            } else {
+                auto verts = GetRigidSphereVertices(body);
+                auto span  = Engine::make_span_bytes<glm::vec3>(verts);
+
+                if (_drawRigidSolid && _rigidSphereItem) {
+                    _lineprogram.GetUniforms().SetByName("u_Color", ToGlm(body.color));
+                    _rigidSphereItem->UpdateVertexBuffer("position", span);
+                    _rigidSphereItem->Draw({ _lineprogram.Use() });
+                }
+                if (_drawRigidWireframe && _rigidSphereLineItem) {
+                    glm::vec3 lineColor = body.isStatic ? glm::vec3(0.90f, 0.90f, 0.90f) : glm::vec3(1.0f, 1.0f, 1.0f);
+                    if (selected && ! body.isStatic) lineColor = glm::vec3(1.0f, 0.95f, 0.20f);
+                    if (hovered && ! body.isStatic) lineColor = glm::vec3(0.20f, 1.0f, 0.35f);
+                    _lineprogram.GetUniforms().SetByName("u_Color", lineColor);
+                    glLineWidth(_rigidLineWidth);
+                    _rigidSphereLineItem->UpdateVertexBuffer("position", span);
+                    _rigidSphereLineItem->Draw({ _lineprogram.Use() });
+                    glLineWidth(1.0f);
+                }
+            }
+        }
+
+        if (_showRigidContacts && _rigidContactPointItem && ! _world.GetRigidBodies().Contacts.empty()) {
+            auto contactVerts = GetRigidContactVertices();
+            glPointSize(_rigidPointSize);
+            _lineprogram.GetUniforms().SetByName("u_Color", glm::vec3(1.0f, 0.15f, 0.1f));
+            _rigidContactPointItem->UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(contactVerts));
+            _rigidContactPointItem->Draw({ _lineprogram.Use() });
+            glPointSize(1.0f);
         }
 
         glDepthFunc(GL_LESS);
@@ -229,38 +425,70 @@ namespace VCX::MainScene {
         };
     }
 
-    void MainScene::ApplyRigidBodyKeyboardControls() {
-        int const selected = _world.SelectedRigidBody();
-        if (selected < 0) return;
+    void MainScene::ApplyRigidBodyLab1Controls() {
+        auto & rigid = _world.GetRigidBodies();
+        if (! _hoverHasHit) return;
+        if (! rigid.IsValidBody(_hoverRigidBodyId)) return;
+        if (rigid.Bodies[_hoverRigidBodyId].isStatic) return;
+        if (! ImGui::IsKeyDown(ImGuiKey_F)) return;
 
-        float const forceMag = _world.RigidKeyboardForce();
-        Eigen::Vector3f f = Eigen::Vector3f::Zero();
-        if (ImGui::IsKeyDown(ImGuiKey_J)) f.x() -= forceMag;
-        if (ImGui::IsKeyDown(ImGuiKey_L)) f.x() += forceMag;
-        if (ImGui::IsKeyDown(ImGuiKey_U)) f.y() += forceMag;
-        if (ImGui::IsKeyDown(ImGuiKey_O)) f.y() -= forceMag;
-        if (ImGui::IsKeyDown(ImGuiKey_I)) f.z() -= forceMag;
-        if (ImGui::IsKeyDown(ImGuiKey_K)) f.z() += forceMag;
-        if (f.squaredNorm() > 0.0f) {
-            _world.ApplyExternalForceToBody(selected, f);
-        }
-
-        Eigen::Vector3f torque = Eigen::Vector3f::Zero();
-        if (ImGui::IsKeyDown(ImGuiKey_Q)) torque.y() += forceMag * 0.08f;
-        if (ImGui::IsKeyDown(ImGuiKey_E)) torque.y() -= forceMag * 0.08f;
-        if (torque.squaredNorm() > 0.0f) {
-            _world.ApplyExternalTorqueToBody(selected, torque);
-        }
+        _world.SetSelectedRigidBody(_hoverRigidBodyId);
+        Eigen::Vector3f const pointForce = _world.RigidKeyboardForce() * SafeNormalized(_hoverRayDir, Eigen::Vector3f::UnitZ());
+        rigid.ApplyForce(_hoverRigidBodyId, pointForce, _hoverHitPoint);
     }
 
     void MainScene::OnProcessInput(ImVec2 const & pos) {
-        _cameraManager.ProcessInput(_sceneObject.Camera, pos);
+        ImGuiIO const & io            = ImGui::GetIO();
+        bool const      canvasHovered = ImGui::IsItemHovered();
+        bool const      leftDown      = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        bool const      altLeftClick  = canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && io.KeyAlt;
+
+        _hoverHasHit      = false;
+        _hoverRigidBodyId = -1;
+        if (canvasHovered) {
+            int             hoverId  = -1;
+            Eigen::Vector3f hoverHit = Eigen::Vector3f::Zero();
+            Eigen::Vector3f rayOrigin = Eigen::Vector3f::Zero();
+            Eigen::Vector3f rayDir    = Eigen::Vector3f::UnitZ();
+            if (ComputePickRay(pos, rayOrigin, rayDir) && PickRigidBody(pos, hoverId, hoverHit)) {
+                _hoverHasHit      = true;
+                _hoverRigidBodyId = hoverId;
+                _hoverHitPoint    = hoverHit;
+                _hoverRayDir      = rayDir;
+            }
+        }
+
+        if (_isDraggingRigidBody && ! leftDown) {
+            _isDraggingRigidBody = false;
+        }
+
+        if (altLeftClick && _hoverHasHit && _world.GetRigidBodies().IsValidBody(_hoverRigidBodyId)) {
+            auto const & body = _world.GetRigidBodies().Bodies[_hoverRigidBodyId];
+            if (! body.isStatic) {
+                _world.SetSelectedRigidBody(_hoverRigidBodyId);
+                _dragPlaneNormal     = SafeNormalized(ToEigen(glm::normalize(_sceneObject.Camera.Target - _sceneObject.Camera.Eye)), Eigen::Vector3f::UnitZ());
+                _dragPlanePoint      = _hoverHitPoint;
+                _dragBodyOffset      = body.x - _hoverHitPoint;
+                _isDraggingRigidBody = true;
+                UpdateDraggedRigidBody(pos);
+            }
+        }
+
+        bool const draggingNow = _isDraggingRigidBody && leftDown;
+        if (draggingNow) {
+            UpdateDraggedRigidBody(pos);
+        } else {
+            _cameraManager.ProcessInput(_sceneObject.Camera, pos);
+        }
     }
 
     void MainScene::ResetSystem() {
         _world.Reset();
         _r      = _world.GetFluid().m_particleRadius;
         _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        _isDraggingRigidBody = false;
+        _hoverHasHit         = false;
+        _hoverRigidBodyId    = -1;
         RebuildParticleRenderItem();
         RebuildRigidBodyRenderItem();
     }
@@ -269,6 +497,9 @@ namespace VCX::MainScene {
         _world.Reset(res);
         _r      = _world.GetFluid().m_particleRadius;
         _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        _isDraggingRigidBody = false;
+        _hoverHasHit         = false;
+        _hoverRigidBodyId    = -1;
         RebuildParticleRenderItem();
         RebuildRigidBodyRenderItem();
     }
@@ -291,43 +522,127 @@ namespace VCX::MainScene {
     }
 
     void MainScene::RebuildRigidBodyRenderItem() {
-        _rigidBodyLineItem.emplace(
+        _rigidBoxItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Triangles);
+        _rigidBoxItem->UpdateElementBuffer(kBoxTriIndex);
+
+        _rigidBoxLineItem.emplace(
             Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
             Engine::GL::PrimitiveType::Lines);
-        UpdateRigidBodyRenderItem();
+        _rigidBoxLineItem->UpdateElementBuffer(kBoxLineIndex);
+
+        auto const & sphereMesh = GetUnitRigidSphereMesh();
+        _rigidSphereItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Triangles);
+        _rigidSphereItem->UpdateElementBuffer(sphereMesh.triIndices);
+
+        _rigidSphereLineItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Lines);
+        _rigidSphereLineItem->UpdateElementBuffer(sphereMesh.lineIndices);
+
+        _rigidContactPointItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Points);
     }
 
-    void MainScene::UpdateRigidBodyRenderItem() {
-        if (! _rigidBodyLineItem) return;
+    bool MainScene::ComputePickRay(ImVec2 const & pos, Eigen::Vector3f & rayOrigin, Eigen::Vector3f & rayDir) const {
+        if (_world.GetRigidBodies().Bodies.empty() || _viewportSize.first == 0 || _viewportSize.second == 0) return false;
+        WorldRay const ray = ScreenPointToWorldRay(pos);
+        rayOrigin = ToEigen(ray.Origin);
+        rayDir    = SafeNormalized(ToEigen(ray.Direction), Eigen::Vector3f::UnitZ());
+        return true;
+    }
 
-        std::vector<glm::vec3>     vertices;
-        std::vector<std::uint32_t> indices;
+    bool MainScene::PickRigidBody(ImVec2 const & pos, int & bodyId, Eigen::Vector3f & hitPoint) const {
+        Eigen::Vector3f rayOrigin = Eigen::Vector3f::Zero();
+        Eigen::Vector3f rayDir    = Eigen::Vector3f::UnitZ();
+        if (! ComputePickRay(pos, rayOrigin, rayDir)) return false;
+
+        float closestT = std::numeric_limits<float>::max();
+        int   picked   = -1;
         auto const & bodies = _world.GetRigidBodies().Bodies;
+        for (int i = 0; i < static_cast<int>(bodies.size()); ++i) {
+            auto const & body = bodies[i];
+            if (body.isStatic) continue;
 
-        for (auto const & body : bodies) {
-            if (body.shape == RigidBodyShape::Box) {
-                auto const corners = body.GetWorldCorners();
-                std::uint32_t const base = static_cast<std::uint32_t>(vertices.size());
-                for (auto const & c : corners) vertices.push_back(ToGlm(c));
-                for (std::uint32_t idx : kBoxLineIndex) indices.push_back(base + idx);
+            float           t   = 0.0f;
+            Eigen::Vector3f hit = Eigen::Vector3f::Zero();
+            bool            ok  = false;
+            if (body.shape == RigidBodyShape::Sphere) {
+                ok = IntersectRaySphere(rayOrigin, rayDir, body, t, hit);
             } else {
-                int constexpr segmentCount = 32;
-                for (int ring = 0; ring < 3; ++ring) {
-                    std::uint32_t const base = static_cast<std::uint32_t>(vertices.size());
-                    for (int s = 0; s < segmentCount; ++s) {
-                        vertices.push_back(MakeSphereRingPoint(body, ring, s, segmentCount));
-                    }
-                    for (int s = 0; s < segmentCount; ++s) {
-                        indices.push_back(base + std::uint32_t(s));
-                        indices.push_back(base + std::uint32_t((s + 1) % segmentCount));
-                    }
-                }
+                ok = IntersectRayOBB(rayOrigin, rayDir, body, t, hit);
+            }
+            if (! ok) continue;
+            if (t < closestT) {
+                closestT = t;
+                picked   = i;
+                hitPoint = hit;
             }
         }
 
-        if (vertices.empty() || indices.empty()) return;
-        _rigidBodyLineItem->UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(vertices));
-        _rigidBodyLineItem->UpdateElementBuffer(indices);
+        bodyId = picked;
+        return picked >= 0;
+    }
+
+    bool MainScene::UpdateDraggedRigidBody(ImVec2 const & pos) {
+        int const id = _world.SelectedRigidBody();
+        auto & rigid = _world.GetRigidBodies();
+        if (! _isDraggingRigidBody || ! rigid.IsValidBody(id)) return false;
+
+        Eigen::Vector3f rayOrigin = Eigen::Vector3f::Zero();
+        Eigen::Vector3f rayDir    = Eigen::Vector3f::UnitZ();
+        if (! ComputePickRay(pos, rayOrigin, rayDir)) return false;
+
+        Eigen::Vector3f hitPoint = Eigen::Vector3f::Zero();
+        if (! IntersectRayPlane(rayOrigin, rayDir, _dragPlanePoint, _dragPlaneNormal, hitPoint)) return false;
+
+        auto & body = rigid.Bodies[id];
+        if (body.isStatic) return false;
+        body.x = hitPoint + _dragBodyOffset;
+        body.v.setZero();
+        body.w.setZero();
+        body.force.setZero();
+        body.torque.setZero();
+        rigid.Contacts.clear();
+        return true;
+    }
+
+    std::vector<glm::vec3> MainScene::GetRigidBoxVertices(RigidBody const & body) const {
+        auto const             corners = body.GetWorldCorners();
+        std::vector<glm::vec3> verts(8);
+        for (int i = 0; i < 8; ++i) verts[i] = ToGlm(corners[i]);
+        return verts;
+    }
+
+    std::vector<glm::vec3> MainScene::GetRigidSphereVertices(RigidBody const & body) const {
+        SphereMeshData const & sphereMesh = GetUnitRigidSphereMesh();
+        std::vector<glm::vec3> verts;
+        verts.reserve(sphereMesh.vertices.size());
+        float const           radius = 0.5f * body.dim.x();
+        Eigen::Matrix3f const R      = body.GetRotationMatrix();
+        for (glm::vec3 const & p : sphereMesh.vertices) {
+            Eigen::Vector3f const local(p.x, p.y, p.z);
+            Eigen::Vector3f const world = body.x + radius * (R * local);
+            verts.push_back(ToGlm(world));
+        }
+        return verts;
+    }
+
+    std::vector<glm::vec3> MainScene::GetRigidContactVertices() const {
+        std::vector<glm::vec3> verts;
+        auto const & rigid = _world.GetRigidBodies();
+        verts.reserve(rigid.Contacts.size());
+        for (auto const & c : rigid.Contacts) {
+            bool const touchesInternalTank = rigid.IsValidBody(c.idA) && IsInternalTankBoundary(rigid.Bodies[c.idA])
+                || rigid.IsValidBody(c.idB) && IsInternalTankBoundary(rigid.Bodies[c.idB]);
+            if (touchesInternalTank) continue;
+            verts.push_back(ToGlm(c.position));
+        }
+        return verts;
     }
 
     WorldRay MainScene::ScreenPointToWorldRay(ImVec2 const & pos) const {
@@ -352,4 +667,4 @@ namespace VCX::MainScene {
             .Direction = glm::normalize(glm::vec3(farPoint - nearPoint)),
         };
     }
-}; // namespace VCX::MainScene
+} // namespace VCX::MainScene

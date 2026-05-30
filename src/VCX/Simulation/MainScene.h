@@ -2,6 +2,7 @@
 
 #include "Engine/GL/Frame.hpp"
 #include "Engine/GL/Program.h"
+#include "Engine/GL/RenderItem.h"
 #include "Engine/GL/UniformBlock.hpp"
 #include "Engine/Sphere.h"
 #include "Simulation/SimulationWorld.h"
@@ -12,6 +13,8 @@
 #include "Scene/SceneObject.h"
 
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace VCX::MainScene {
 
@@ -54,10 +57,34 @@ namespace VCX::MainScene {
         bool                                _stopped { false };
         Engine::Model                       _sphere;
         std::optional<Engine::GL::UniqueIndexedRenderItem> _particleItem;
-        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBodyLineItem;
+
+        // Rigid bodies are rendered in the same style as Lab1: solid colored mesh + white/yellow wireframe.
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoxItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoxLineItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidSphereItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidSphereLineItem;
+        std::optional<Engine::GL::UniqueRenderItem>        _rigidContactPointItem;
+
         std::pair<std::uint32_t, std::uint32_t> _viewportSize { 1, 1 };
         float                               _r;
         SimulationWorld                     _world;
+
+        bool  _drawRigidSolid     { true };
+        bool  _drawRigidWireframe { true };
+        bool  _showRigidContacts  { true };
+        float _rigidLineWidth     { 1.5f };
+        float _rigidPointSize     { 7.0f };
+
+        // Lab1-style interaction state.  F applies a point force at the hovered surface point.
+        // Alt + left mouse drags the body on a camera-facing plane.  The drag math is the same pick-plane logic used in Lab1; Alt is kept only to avoid stealing the Lab4 camera drag.
+        bool            _isDraggingRigidBody { false };
+        int             _hoverRigidBodyId    { -1 };
+        bool            _hoverHasHit         { false };
+        Eigen::Vector3f _hoverHitPoint       { Eigen::Vector3f::Zero() };
+        Eigen::Vector3f _hoverRayDir         { Eigen::Vector3f::UnitZ() };
+        Eigen::Vector3f _dragPlanePoint      { Eigen::Vector3f::Zero() };
+        Eigen::Vector3f _dragPlaneNormal     { Eigen::Vector3f::UnitZ() };
+        Eigen::Vector3f _dragBodyOffset      { Eigen::Vector3f::Zero() };
 
         char const *          GetSceneName(std::size_t const i) const { return VCX::Scene::Content::SceneNames[std::size_t(_scenes[i])].c_str(); }
         Engine::Scene const & GetScene(std::size_t const i) const { return VCX::Scene::Content::Scenes[std::size_t(_scenes[i])]; }
@@ -65,9 +92,14 @@ namespace VCX::MainScene {
         void                  ResetSystem(int res);
         void                  RebuildParticleRenderItem();
         void                  RebuildRigidBodyRenderItem();
-        void                  UpdateRigidBodyRenderItem();
         void                  DrawRigidBodyControls();
-        void                  ApplyRigidBodyKeyboardControls();
+        void                  ApplyRigidBodyLab1Controls();
+        bool                  ComputePickRay(ImVec2 const & pos, Eigen::Vector3f & rayOrigin, Eigen::Vector3f & rayDir) const;
+        bool                  PickRigidBody(ImVec2 const & pos, int & bodyId, Eigen::Vector3f & hitPoint) const;
+        bool                  UpdateDraggedRigidBody(ImVec2 const & pos);
+        std::vector<glm::vec3> GetRigidBoxVertices(RigidBody const & body) const;
+        std::vector<glm::vec3> GetRigidSphereVertices(RigidBody const & body) const;
+        std::vector<glm::vec3> GetRigidContactVertices() const;
         WorldRay              ScreenPointToWorldRay(ImVec2 const & pos) const;
     };
 

@@ -37,6 +37,13 @@ namespace VCX::MainScene {
         bool            tangentInitialized        = false;
     };
 
+    struct RigidSurfaceSample {
+        int             bodyId   = -1;
+        Eigen::Vector3f position = Eigen::Vector3f::Zero();
+        Eigen::Vector3f normal   = Eigen::Vector3f::UnitY();
+        float           area     = 0.0f;
+    };
+
     struct RigidBody {
         RigidBodyShape     shape = RigidBodyShape::Box;
         Eigen::Vector3f    dim   = Eigen::Vector3f::Ones(); // box: full size; sphere: diameter in x/y/z
@@ -120,6 +127,7 @@ namespace VCX::MainScene {
 
         int             GetFirstDynamicBody() const;
         Eigen::Vector3f VelocityAtPoint(int id, Eigen::Vector3f const & worldPoint) const;
+        void            CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const;
         bool            IsValidBody(int id) const;
 
         void SetBodyMass(int id, float mass);
