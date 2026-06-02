@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <limits>
 
 namespace VCX::MainScene {
@@ -75,7 +76,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::integrateParticles(float timeStep) {
         for (int i = 0; i < m_iNumSpheres; i++) {
-            //m_particleVel[i] += gravity * timeStep;
+            if (enableGravity) m_particleVel[i] += gravity * timeStep;
             m_particlePos[i] += m_particleVel[i] * timeStep;
         }
     }
@@ -578,8 +579,8 @@ namespace VCX::MainScene {
                         (samplePhi(i, j + 1, k) - samplePhi(i, j - 1, k)) * 0.5f * m_fInvSpacing,
                         (samplePhi(i, j, k + 1) - samplePhi(i, j, k - 1)) * 0.5f * m_fInvSpacing);
 
-                    int const id = index2GridOffset(glm::ivec3(i, j, k));
-                    float const len = glm::length(gradPhi);
+                    int const   id      = index2GridOffset(glm::ivec3(i, j, k));
+                    float const len     = glm::length(gradPhi);
                     m_surfaceNormal[id] = (len > 1e-5f) ? gradPhi / len : glm::vec3(0.0f);
                 }
             }
@@ -605,7 +606,7 @@ namespace VCX::MainScene {
 
                     float curvature = ((nxp.x - nxm.x) + (nyp.y - nym.y) + (nzp.z - nzm.z))
                         * 0.5f * m_fInvSpacing;
-                    int const id = index2GridOffset(glm::ivec3(i, j, k));
+                    int const id           = index2GridOffset(glm::ivec3(i, j, k));
                     m_surfaceCurvature[id] = glm::clamp(curvature, -m_surfaceCurvatureMax, m_surfaceCurvatureMax);
                 }
             }
@@ -613,7 +614,7 @@ namespace VCX::MainScene {
 
         // 窄带内的双边滤波平滑曲率，减小噪声影响同时尽量保持边缘特征
         std::vector<float> filtered = m_surfaceCurvature;
-        float const band = (m_surfaceBandWidth > 0.0f) ? m_surfaceBandWidth : 2.0f * m_h;
+        float const        band     = (m_surfaceBandWidth > 0.0f) ? m_surfaceBandWidth : 2.0f * m_h;
         for (int i = 0; i < m_iCellX; ++i) {
             for (int j = 0; j < m_iCellY; ++j) {
                 for (int k = 0; k < m_iCellZ; ++k) {
@@ -627,8 +628,8 @@ namespace VCX::MainScene {
                         for (int dj = -1; dj <= 1; ++dj) {
                             int const nj = clampCoord(j + dj, 0, m_iCellY - 1);
                             for (int dk = -1; dk <= 1; ++dk) {
-                                int const nk  = clampCoord(k + dk, 0, m_iCellZ - 1);
-                                int const nid = index2GridOffset(glm::ivec3(ni, nj, nk));
+                                int const   nk   = clampCoord(k + dk, 0, m_iCellZ - 1);
+                                int const   nid  = index2GridOffset(glm::ivec3(ni, nj, nk));
                                 float const dPhi = m_surfacePhi[nid] - m_surfacePhi[id];
                                 float const w    = std::exp(-(dPhi * dPhi) / (band * band + 1e-6f)); // w=e^(-ΔPhi^2 / band^2)
                                 accum += w * m_surfaceCurvature[nid];
@@ -636,9 +637,7 @@ namespace VCX::MainScene {
                             }
                         }
                     }
-                    filtered[id] = glm::clamp(accum / std::max(wsum, 1e-6f),
-                                              -m_surfaceCurvatureMax,
-                                              m_surfaceCurvatureMax);
+                    filtered[id] = glm::clamp(accum / std::max(wsum, 1e-6f), -m_surfaceCurvatureMax, m_surfaceCurvatureMax);
                 }
             }
         }
@@ -656,17 +655,17 @@ namespace VCX::MainScene {
                 glm::clamp(gRaw.y, 0.0f, float(m_iCellY - 1)),
                 glm::clamp(gRaw.z, 0.0f, float(m_iCellZ - 1)));
 
-            int const ix0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 1);
-            int const iy0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 1);
-            int const iz0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 1);
-            int const ix1 = std::min(ix0 + 1, m_iCellX - 1);
-            int const iy1 = std::min(iy0 + 1, m_iCellY - 1);
-            int const iz1 = std::min(iz0 + 1, m_iCellZ - 1);
-            float const fx = glm::clamp(g.x - float(ix0), 0.0f, 1.0f);
-            float const fy = glm::clamp(g.y - float(iy0), 0.0f, 1.0f);
-            float const fz = glm::clamp(g.z - float(iz0), 0.0f, 1.0f);
+            int const   ix0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 1);
+            int const   iy0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 1);
+            int const   iz0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 1);
+            int const   ix1 = std::min(ix0 + 1, m_iCellX - 1);
+            int const   iy1 = std::min(iy0 + 1, m_iCellY - 1);
+            int const   iz1 = std::min(iz0 + 1, m_iCellZ - 1);
+            float const fx  = glm::clamp(g.x - float(ix0), 0.0f, 1.0f);
+            float const fy  = glm::clamp(g.y - float(iy0), 0.0f, 1.0f);
+            float const fz  = glm::clamp(g.z - float(iz0), 0.0f, 1.0f);
 
-            auto at = [&](int x, int y, int z) { return field[index2GridOffset(glm::ivec3(x, y, z))]; };
+            auto        at  = [&](int x, int y, int z) { return field[index2GridOffset(glm::ivec3(x, y, z))]; };
             float const c00 = glm::mix(at(ix0, iy0, iz0), at(ix1, iy0, iz0), fx);
             float const c10 = glm::mix(at(ix0, iy1, iz0), at(ix1, iy1, iz0), fx);
             float const c01 = glm::mix(at(ix0, iy0, iz1), at(ix1, iy0, iz1), fx);
@@ -682,17 +681,17 @@ namespace VCX::MainScene {
                 glm::clamp(gRaw.y, 0.0f, float(m_iCellY - 1)),
                 glm::clamp(gRaw.z, 0.0f, float(m_iCellZ - 1)));
 
-            int const ix0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 1);
-            int const iy0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 1);
-            int const iz0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 1);
-            int const ix1 = std::min(ix0 + 1, m_iCellX - 1);
-            int const iy1 = std::min(iy0 + 1, m_iCellY - 1);
-            int const iz1 = std::min(iz0 + 1, m_iCellZ - 1);
-            float const fx = glm::clamp(g.x - float(ix0), 0.0f, 1.0f);
-            float const fy = glm::clamp(g.y - float(iy0), 0.0f, 1.0f);
-            float const fz = glm::clamp(g.z - float(iz0), 0.0f, 1.0f);
+            int const   ix0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 1);
+            int const   iy0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 1);
+            int const   iz0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 1);
+            int const   ix1 = std::min(ix0 + 1, m_iCellX - 1);
+            int const   iy1 = std::min(iy0 + 1, m_iCellY - 1);
+            int const   iz1 = std::min(iz0 + 1, m_iCellZ - 1);
+            float const fx  = glm::clamp(g.x - float(ix0), 0.0f, 1.0f);
+            float const fy  = glm::clamp(g.y - float(iy0), 0.0f, 1.0f);
+            float const fz  = glm::clamp(g.z - float(iz0), 0.0f, 1.0f);
 
-            auto at = [&](int x, int y, int z) { return field[index2GridOffset(glm::ivec3(x, y, z))]; };
+            auto            at  = [&](int x, int y, int z) { return field[index2GridOffset(glm::ivec3(x, y, z))]; };
             glm::vec3 const c00 = glm::mix(at(ix0, iy0, iz0), at(ix1, iy0, iz0), fx);
             glm::vec3 const c10 = glm::mix(at(ix0, iy1, iz0), at(ix1, iy1, iz0), fx);
             glm::vec3 const c01 = glm::mix(at(ix0, iy0, iz1), at(ix1, iy0, iz1), fx);
@@ -702,18 +701,60 @@ namespace VCX::MainScene {
 
         float const band = (m_surfaceBandWidth > 0.0f) ? m_surfaceBandWidth : 2.0f * m_h;
         for (int p = 0; p < m_iNumSpheres; ++p) {
-            float const phi = sampleFloat(m_surfacePhi, m_particlePos[p]);
+            float const phi          = sampleFloat(m_surfacePhi, m_particlePos[p]);
             float const surfaceDelta = glm::clamp(1.0f - std::abs(phi) / band, 0.0f, 1.0f);
             if (surfaceDelta <= 0.0f) continue; // 只对接近界面(窄带内)的粒子施加表面张力
 
-            glm::vec3 const n = sampleVec(m_surfaceNormal, m_particlePos[p]);
-            float const nLen = glm::length(n);
+            glm::vec3 const n    = sampleVec(m_surfaceNormal, m_particlePos[p]);
+            float const     nLen = glm::length(n);
             if (nLen <= 1e-5f) continue;
 
-            float const kappa = sampleFloat(m_surfaceCurvature, m_particlePos[p]);  // 曲率
+            float const     kappa = sampleFloat(m_surfaceCurvature, m_particlePos[p]);     // 曲率
             glm::vec3 const accel = -m_surfaceTension * kappa * (n / nLen) * surfaceDelta; // 张力体现为沿法向指向液体内部的加速度，曲率越大(界面越弯曲)张力越强；surfaceDelta随到表面距离线性变化，在窄带外为0
             m_particleVel[p] += accel * dt;
         }
+    }
+
+    void FluidSimulator::EnsureSurfaceFields() {
+        if (m_iNumCells <= 0) return;
+
+        bool const hasValidSize = m_surfaceColor.size() == static_cast<std::size_t>(m_iNumCells)
+            && m_surfacePhi.size() == static_cast<std::size_t>(m_iNumCells)
+            && m_surfaceNormal.size() == static_cast<std::size_t>(m_iNumCells)
+            && m_surfaceCurvature.size() == static_cast<std::size_t>(m_iNumCells);
+
+        if (! hasValidSize) {
+            m_surfaceColor.assign(m_iNumCells, 0.0f);
+            m_surfacePhi.assign(m_iNumCells, 0.0f);
+            m_surfaceNormal.assign(m_iNumCells, glm::vec3(0.0f));
+            m_surfaceCurvature.assign(m_iNumCells, 0.0f);
+            m_surfaceRestField = 0.0f;
+        }
+
+        if (m_surfaceKernelRadius <= 0.0f) m_surfaceKernelRadius = 2.0f * m_h;
+        if (m_surfaceBandWidth <= 0.0f) m_surfaceBandWidth = 2.0f * m_h;
+        if (m_surfaceCurvatureMax <= 0.0f) m_surfaceCurvatureMax = 1.0f / m_h;
+    }
+
+    void FluidSimulator::ClearSurfaceFields() {
+        m_surfaceColor.clear();
+        m_surfacePhi.clear();
+        m_surfaceNormal.clear();
+        m_surfaceCurvature.clear();
+        m_surfaceKernelRadius = 0.0f;
+        m_surfaceBandWidth    = 0.0f;
+        m_surfaceCurvatureMax = 0.0f;
+        m_surfaceRestField    = 0.0f;
+    }
+
+    void FluidSimulator::SetSurfaceModelingEnabled(bool enabled) {
+        if (enableSurfaceModeling == enabled) return;
+
+        enableSurfaceModeling = enabled;
+        if (enableSurfaceModeling)
+            EnsureSurfaceFields();
+        else
+            ClearSurfaceFields();
     }
 
     void FluidSimulator::updateParticleColors() {
@@ -745,7 +786,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.4f, 0.5f, 0.4f };
+        glm::vec3 relWater = { 0.5f, 0.6f, 0.5f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;
@@ -803,19 +844,10 @@ namespace VCX::MainScene {
 
         // 建模流体表面
         if (enableSurfaceModeling) {
-            m_surfaceColor.clear();
-            m_surfaceColor.resize(m_iNumCells, 0.0f);
-            m_surfacePhi.clear();
-            m_surfacePhi.resize(m_iNumCells, 0.0f);
-            m_surfaceNormal.clear();
-            m_surfaceNormal.resize(m_iNumCells, glm::vec3(0.0f));
-            m_surfaceCurvature.clear();
-            m_surfaceCurvature.resize(m_iNumCells, 0.0f);
-
-            m_surfaceKernelRadius = 2.0f * m_h;
-            m_surfaceBandWidth    = 2.0f * m_h;
-            m_surfaceCurvatureMax = 1.0f / m_h;
-            m_surfaceRestField    = 0.0f;
+            ClearSurfaceFields();
+            EnsureSurfaceFields();
+        } else {
+            ClearSurfaceFields();
         }
 
         // 生成HCP排列的粒子
@@ -1045,6 +1077,7 @@ namespace VCX::MainScene {
                 pushParticlesApart(cfg.numParticleIters);
             handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
             if (enableSurfaceModeling) {
+                EnsureSurfaceFields();
                 updateSurfaceField();
                 computeSurfaceGeometry();
                 applySurfaceTension(sdt);

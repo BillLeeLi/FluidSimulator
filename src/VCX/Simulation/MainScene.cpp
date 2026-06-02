@@ -1,6 +1,6 @@
 #include "Simulation/MainScene.h"
-#include "Engine/app.h"
 #include "Common/ImGuiHelper.h"
+#include "Engine/app.h"
 
 #include <algorithm>
 #include <array>
@@ -24,29 +24,80 @@ namespace VCX::MainScene {
 
         const std::vector<glm::vec3> vertex_pos = {
             glm::vec3(-0.5f, -0.5f, -0.5f),
-            glm::vec3( 0.5f, -0.5f, -0.5f),
-            glm::vec3( 0.5f,  0.5f, -0.5f),
-            glm::vec3(-0.5f,  0.5f, -0.5f),
-            glm::vec3(-0.5f, -0.5f,  0.5f),
-            glm::vec3( 0.5f, -0.5f,  0.5f),
-            glm::vec3( 0.5f,  0.5f,  0.5f),
-            glm::vec3(-0.5f,  0.5f,  0.5f),
+            glm::vec3(0.5f, -0.5f, -0.5f),
+            glm::vec3(0.5f, 0.5f, -0.5f),
+            glm::vec3(-0.5f, 0.5f, -0.5f),
+            glm::vec3(-0.5f, -0.5f, 0.5f),
+            glm::vec3(0.5f, -0.5f, 0.5f),
+            glm::vec3(0.5f, 0.5f, 0.5f),
+            glm::vec3(-0.5f, 0.5f, 0.5f),
         };
         const std::vector<std::uint32_t> line_index = { 0, 1, 1, 2, 2, 3, 3, 0, 4, 5, 5, 6, 6, 7, 7, 4, 0, 4, 1, 5, 2, 6, 3, 7 };
 
         const std::vector<std::uint32_t> kBoxLineIndex = {
-            0, 1, 1, 2, 2, 3, 3, 0,
-            4, 5, 5, 6, 6, 7, 7, 4,
-            0, 4, 1, 5, 2, 6, 3, 7,
+            0,
+            1,
+            1,
+            2,
+            2,
+            3,
+            3,
+            0,
+            4,
+            5,
+            5,
+            6,
+            6,
+            7,
+            7,
+            4,
+            0,
+            4,
+            1,
+            5,
+            2,
+            6,
+            3,
+            7,
         };
 
         const std::vector<std::uint32_t> kBoxTriIndex = {
-            0, 1, 2, 0, 2, 3,
-            1, 0, 4, 1, 4, 5,
-            1, 5, 6, 1, 6, 2,
-            2, 6, 7, 2, 7, 3,
-            0, 3, 7, 0, 7, 4,
-            4, 7, 6, 4, 6, 5,
+            0,
+            1,
+            2,
+            0,
+            2,
+            3,
+            1,
+            0,
+            4,
+            1,
+            4,
+            5,
+            1,
+            5,
+            6,
+            1,
+            6,
+            2,
+            2,
+            6,
+            7,
+            2,
+            7,
+            3,
+            0,
+            3,
+            7,
+            0,
+            7,
+            4,
+            4,
+            7,
+            6,
+            4,
+            6,
+            5,
         };
 
         SphereMeshData const & GetUnitRigidSphereMesh() {
@@ -132,7 +183,7 @@ namespace VCX::MainScene {
                 }
 
                 float t1 = (-h - o) / d;
-                float t2 = ( h - o) / d;
+                float t2 = (h - o) / d;
                 if (t1 > t2) std::swap(t1, t2);
                 tMin = std::max(tMin, t1);
                 tMax = std::min(tMax, t2);
@@ -144,7 +195,6 @@ namespace VCX::MainScene {
             hitPoint = rayOrigin + tHit * rayDir;
             return true;
         }
-
 
         bool IsInternalTankBoundary(RigidBody const & body) {
             return body.isStatic && body.name.rfind("tank_", 0) == 0;
@@ -213,7 +263,15 @@ namespace VCX::MainScene {
         if (ImGui::SliderInt("Inv Time Step", &invDeltaTime, 20, 240))
             _world.SetInvDeltaTime(invDeltaTime);
 
-        auto const & fluid = _world.GetFluid();
+        auto const & fluid           = _world.GetFluid();
+        bool   enableSurfaceModeling = _world.EnableSurfaceModeling();
+        if (ImGui::Checkbox("Enable Surface Modeling", &enableSurfaceModeling))
+            _world.SetSurfaceModelingEnabled(enableSurfaceModeling);
+
+        bool enableGravity = _world.EnableGravity();
+        if (ImGui::Checkbox("Enable Gravity", &enableGravity))
+            _world.SetGravityEnabled(enableGravity);
+
         ImGui::Text("Particles: %d", fluid.m_iNumSpheres);
         ImGui::Text("Grid: %d x %d x %d", fluid.m_iCellX, fluid.m_iCellY, fluid.m_iCellZ);
 
@@ -229,7 +287,7 @@ namespace VCX::MainScene {
         if (! ImGui::CollapsingHeader("Rigid Body Controls", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
         char const * presetNames[] = { "Fluid Coupling Mixed", "Box Collision", "Mixed Stack" };
-        int preset = int(_world.RigidPreset());
+        int          preset        = int(_world.RigidPreset());
         if (ImGui::Combo("Rigid Preset", &preset, presetNames, 3)) {
             _world.SetRigidPreset(RigidBodyPreset(preset));
             RebuildRigidBodyRenderItem();
@@ -446,8 +504,8 @@ namespace VCX::MainScene {
         _hoverHasHit      = false;
         _hoverRigidBodyId = -1;
         if (canvasHovered) {
-            int             hoverId  = -1;
-            Eigen::Vector3f hoverHit = Eigen::Vector3f::Zero();
+            int             hoverId   = -1;
+            Eigen::Vector3f hoverHit  = Eigen::Vector3f::Zero();
             Eigen::Vector3f rayOrigin = Eigen::Vector3f::Zero();
             Eigen::Vector3f rayDir    = Eigen::Vector3f::UnitZ();
             if (ComputePickRay(pos, rayOrigin, rayDir) && PickRigidBody(pos, hoverId, hoverHit)) {
@@ -484,8 +542,8 @@ namespace VCX::MainScene {
 
     void MainScene::ResetSystem() {
         _world.Reset();
-        _r      = _world.GetFluid().m_particleRadius;
-        _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        _r                   = _world.GetFluid().m_particleRadius;
+        _sphere              = Engine::Model { Engine::Sphere(4, _r), 0 };
         _isDraggingRigidBody = false;
         _hoverHasHit         = false;
         _hoverRigidBodyId    = -1;
@@ -495,8 +553,8 @@ namespace VCX::MainScene {
 
     void MainScene::ResetSystem(int res) {
         _world.Reset(res);
-        _r      = _world.GetFluid().m_particleRadius;
-        _sphere = Engine::Model { Engine::Sphere(4, _r), 0 };
+        _r                   = _world.GetFluid().m_particleRadius;
+        _sphere              = Engine::Model { Engine::Sphere(4, _r), 0 };
         _isDraggingRigidBody = false;
         _hoverHasHit         = false;
         _hoverRigidBodyId    = -1;
@@ -551,8 +609,8 @@ namespace VCX::MainScene {
     bool MainScene::ComputePickRay(ImVec2 const & pos, Eigen::Vector3f & rayOrigin, Eigen::Vector3f & rayDir) const {
         if (_world.GetRigidBodies().Bodies.empty() || _viewportSize.first == 0 || _viewportSize.second == 0) return false;
         WorldRay const ray = ScreenPointToWorldRay(pos);
-        rayOrigin = ToEigen(ray.Origin);
-        rayDir    = SafeNormalized(ToEigen(ray.Direction), Eigen::Vector3f::UnitZ());
+        rayOrigin          = ToEigen(ray.Origin);
+        rayDir             = SafeNormalized(ToEigen(ray.Direction), Eigen::Vector3f::UnitZ());
         return true;
     }
 
@@ -561,9 +619,9 @@ namespace VCX::MainScene {
         Eigen::Vector3f rayDir    = Eigen::Vector3f::UnitZ();
         if (! ComputePickRay(pos, rayOrigin, rayDir)) return false;
 
-        float closestT = std::numeric_limits<float>::max();
-        int   picked   = -1;
-        auto const & bodies = _world.GetRigidBodies().Bodies;
+        float        closestT = std::numeric_limits<float>::max();
+        int          picked   = -1;
+        auto const & bodies   = _world.GetRigidBodies().Bodies;
         for (int i = 0; i < static_cast<int>(bodies.size()); ++i) {
             auto const & body = bodies[i];
             if (body.isStatic) continue;
@@ -589,8 +647,8 @@ namespace VCX::MainScene {
     }
 
     bool MainScene::UpdateDraggedRigidBody(ImVec2 const & pos) {
-        int const id = _world.SelectedRigidBody();
-        auto & rigid = _world.GetRigidBodies();
+        int const id    = _world.SelectedRigidBody();
+        auto &    rigid = _world.GetRigidBodies();
         if (! _isDraggingRigidBody || ! rigid.IsValidBody(id)) return false;
 
         Eigen::Vector3f rayOrigin = Eigen::Vector3f::Zero();
@@ -634,7 +692,7 @@ namespace VCX::MainScene {
 
     std::vector<glm::vec3> MainScene::GetRigidContactVertices() const {
         std::vector<glm::vec3> verts;
-        auto const & rigid = _world.GetRigidBodies();
+        auto const &           rigid = _world.GetRigidBodies();
         verts.reserve(rigid.Contacts.size());
         for (auto const & c : rigid.Contacts) {
             bool const touchesInternalTank = rigid.IsValidBody(c.idA) && IsInternalTankBoundary(rigid.Bodies[c.idA])
@@ -654,8 +712,7 @@ namespace VCX::MainScene {
         float const y = 1.0f - 2.0f * pos.y / height;
 
         glm::mat4 const invViewProj = glm::inverse(
-            _sceneObject.Camera.GetProjectionMatrix(aspect) *
-            _sceneObject.Camera.GetViewMatrix());
+            _sceneObject.Camera.GetProjectionMatrix(aspect) * _sceneObject.Camera.GetViewMatrix());
 
         glm::vec4 nearPoint = invViewProj * glm::vec4(x, y, -1.0f, 1.0f);
         glm::vec4 farPoint  = invViewProj * glm::vec4(x, y, 1.0f, 1.0f);

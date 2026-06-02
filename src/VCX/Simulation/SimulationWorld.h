@@ -33,6 +33,8 @@ namespace VCX::MainScene {
         int   InvDeltaTime() const { return _invDeltaTime; }
         float FlipRatio() const { return _fluid.m_fRatio; }
         float LastSimTimeMs() const { return _lastSimTimeMs; }
+        bool  EnableSurfaceModeling() const { return _fluid.enableSurfaceModeling; }
+        bool  EnableGravity() const { return _fluid.enableGravity; }
 
         int   SelectedRigidBody() const { return _selectedRigidBody; }
         float RigidKeyboardForce() const { return _rigidKeyboardForce; }
@@ -40,6 +42,8 @@ namespace VCX::MainScene {
 
         void SetInvDeltaTime(int invDeltaTime);
         void SetFlipRatio(float flipRatio);
+        void SetSurfaceModelingEnabled(bool enabled);
+        void SetGravityEnabled(bool enabled);
         void SetSelectedRigidBody(int id);
         void SetRigidKeyboardForce(float force);
         void SetRigidPreset(RigidBodyPreset preset);

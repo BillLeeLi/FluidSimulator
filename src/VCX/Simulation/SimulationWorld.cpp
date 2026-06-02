@@ -84,6 +84,7 @@ namespace VCX::MainScene {
                 _fluid.pushParticlesApart(_numParticleIters);
             _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
             if (_fluid.enableSurfaceModeling) {
+                _fluid.EnsureSurfaceFields();
                 _fluid.updateSurfaceField();
                 _fluid.computeSurfaceGeometry();
                 _fluid.applySurfaceTension(sdt);
@@ -128,6 +129,14 @@ namespace VCX::MainScene {
 
     void SimulationWorld::SetFlipRatio(float flipRatio) {
         _fluid.m_fRatio = std::clamp(flipRatio, 0.0f, 1.0f);
+    }
+
+    void SimulationWorld::SetSurfaceModelingEnabled(bool enabled) {
+        _fluid.SetSurfaceModelingEnabled(enabled);
+    }
+
+    void SimulationWorld::SetGravityEnabled(bool enabled) {
+        _fluid.enableGravity = enabled;
     }
 
     void SimulationWorld::SetSelectedRigidBody(int id) {

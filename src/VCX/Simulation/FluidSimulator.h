@@ -66,7 +66,7 @@ namespace VCX::MainScene {
         std::vector<glm::vec3> m_surfaceNormal;    // 表面法线
         std::vector<float>     m_surfaceCurvature; // 表面曲率
 
-        bool  enableSurfaceModeling = true;  // 是否启用表面建模
+        bool  enableSurfaceModeling = false; // 是否启用表面建模
         float m_surfaceTension      = 0.02f; // 表面张力系数
         float m_surfaceIsoValue     = 0.5f;  // 自由表面等值面阈值，意思是m_surfaceColor=m_surfaceIsoValue的地方被认为是表面
         float m_surfaceKernelRadius = 0.0f;  // 表面建模核半径.默认值2*m_h
@@ -75,6 +75,7 @@ namespace VCX::MainScene {
         float m_surfaceCurvatureMax = 0.0f;  // 最大曲率 (用于限制过大曲率引起的数值不稳定).默认值1/m_h
 
         glm::vec3 gravity { 0, -9.81f, 0 };
+        bool      enableGravity = true;
 
         // ==================== 核心模拟函数 ====================
 
@@ -101,6 +102,9 @@ namespace VCX::MainScene {
         void updateSurfaceField();
         void computeSurfaceGeometry();
         void applySurfaceTension(float dt);
+        void SetSurfaceModelingEnabled(bool enabled);
+        void EnsureSurfaceFields();
+        void ClearSurfaceFields();
 
         // Step 7: 更新粒子颜色 — 根据压力大小着色 (蓝→青→红)
         void updateParticleColors();
