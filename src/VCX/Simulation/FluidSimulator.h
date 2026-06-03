@@ -47,6 +47,8 @@ namespace VCX::MainScene {
         std::vector<glm::vec3> m_vel;         // 当前网格速度
         std::vector<glm::vec3> m_pre_vel;     // 压力求解前的网格速度 (用于FLIP增量计算)
         std::vector<float>     m_near_num[3]; // 每个速度面的权重累积和 (用于P2G归一化)
+        std::vector<glm::vec3> m_solidVel;    // 运动固体边界速度: x/y/z分别对应三个MAC face方向
+        std::vector<glm::ivec3> m_solidVelMask; // 运动固体边界速度是否有效: 0/1
 
         // ==================== 空间哈希表 ====================
         std::vector<int>        m_hashtable;      // 按格点排序的粒子索引列表
@@ -130,6 +132,12 @@ namespace VCX::MainScene {
         // 设置固体Cell
         void SetCellSolid(glm::ivec3 idx, bool solid);
 
+        // 重置/设置运动固体边界速度
+        void ResetSolidBoundaryVelocity();
+        void SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity);
+        bool HasSolidBoundaryVelocity(int i, int j, int k, int dir) const;
+        float SolidBoundaryVelocity(int i, int j, int k, int dir) const;
+
         // 查看Cell类型，用于调试和边界判断
         // 网格外视为固体
         bool IsCellSolid(glm::ivec3 idx) const;
@@ -163,6 +171,7 @@ namespace VCX::MainScene {
         void buildHash();
 
         // 检查速度面 u/v/w 在 (i,j,k,dir) 处是否有效 (未越界且不在固体中)
+        bool isVelocityFaceInRange(int i, int j, int k, int dir) const;
         bool isValidVelocity(int i, int j, int k, int dir) const;
     };
 } // namespace VCX::MainScene

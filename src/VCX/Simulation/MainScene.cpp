@@ -284,6 +284,7 @@ namespace VCX::MainScene {
 
     void MainScene::DrawRigidBodyControls() {
         auto & rigid = _world.GetRigidBodies();
+        auto & coupler = _world.GetCoupler();
         if (! ImGui::CollapsingHeader("Rigid Body Controls", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
         char const * presetNames[] = { "Fluid Coupling Mixed", "Box Collision", "Mixed Stack" };
@@ -301,6 +302,10 @@ namespace VCX::MainScene {
 
         ImGui::Text("Rigid Bodies: %d visible / %d total", int(visibleBodies.size()), int(rigid.Bodies.size()));
         ImGui::Text("Contacts: %d", int(rigid.Contacts.size()));
+        ImGui::Text("Projected Particles: %d", coupler.ProjectedParticleCount());
+        ImGui::Text("Rigid Solid Cells: %d", coupler.RigidSolidCellCount());
+        ImGui::Text("Pressure Contact Samples: %d", coupler.PressureContactFaceCount());
+        ImGui::Text("Moving Boundary Faces: %d", coupler.MovingBoundaryFaceCount());
 
         int selected = _world.SelectedRigidBody();
         if (! visibleBodies.empty()) {
@@ -356,12 +361,24 @@ namespace VCX::MainScene {
 
             ImGui::Text("Velocity: %.3f %.3f %.3f", body.v.x(), body.v.y(), body.v.z());
             ImGui::Text("Angular Vel: %.3f %.3f %.3f", body.w.x(), body.w.y(), body.w.z());
+            Eigen::Vector3f const pressureForce = coupler.PressureForceOnBody(selected);
+            ImGui::Text("Pressure Force: %.3f %.3f %.3f", pressureForce.x(), pressureForce.y(), pressureForce.z());
+            Eigen::Vector3f const particleImpulse = coupler.ParticleImpulseOnBody(selected);
+            ImGui::Text("Particle Impulse: %.5f %.5f %.5f", particleImpulse.x(), particleImpulse.y(), particleImpulse.z());
         }
 
         float pointForce = _world.RigidKeyboardForce();
         if (ImGui::SliderFloat("Lab1 F Point Force", &pointForce, 1.0f, 160.0f)) {
             _world.SetRigidKeyboardForce(pointForce);
         }
+
+        ImGui::Checkbox("Enable Rigid Solid Mask", &coupler.enableRigidSolidMask);
+        ImGui::Checkbox("Enable Pressure Force", &coupler.enablePressureForce);
+        ImGui::Checkbox("Enable Moving Solid Velocity", &coupler.enableMovingSolidVelocity);
+        ImGui::Checkbox("Enable Particle Collision Impulse", &coupler.enableParticleCollisionImpulse);
+        ImGui::SliderFloat("Pressure Force Scale", &coupler.pressureForceScale, 0.0f, 50.0f);
+        ImGui::SliderFloat("Max Pressure For Force", &coupler.maxPressureForForce, 0.0f, 400.0f);
+        ImGui::SliderFloat("Particle Impulse Scale", &coupler.particleImpulseScale, 0.0f, 1.0f);
 
         ImGui::Checkbox("Draw Rigid Solid", &_drawRigidSolid);
         ImGui::Checkbox("Draw Rigid Wireframe", &_drawRigidWireframe);

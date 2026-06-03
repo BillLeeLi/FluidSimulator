@@ -54,7 +54,7 @@ namespace VCX::MainScene {
         }
     }
 
-    bool FluidSimulator::isValidVelocity(int i, int j, int k, int dir) const {
+    bool FluidSimulator::isVelocityFaceInRange(int i, int j, int k, int dir) const {
         if (i < 0 || i >= m_iCellX || j < 0 || j >= m_iCellY || k < 0 || k >= m_iCellZ)
             return false;
         switch (dir) {
@@ -69,6 +69,11 @@ namespace VCX::MainScene {
             break;
         default: return false;
         }
+        return true;
+    }
+
+    bool FluidSimulator::isValidVelocity(int i, int j, int k, int dir) const {
+        if (! isVelocityFaceInRange(i, j, k, dir)) return false;
         return m_s[index2GridOffset(glm::ivec3(i, j, k))] > 0.5f;
     }
 
@@ -381,23 +386,31 @@ namespace VCX::MainScene {
                     for (int k = 0; k < m_iCellZ; k++) {
                         int const id = index2GridOffset(glm::ivec3(i, j, k));
                         if (m_type[id] != FLUID_CELL) continue;
+                        // 这里将刚体考虑在内，与固体相邻的面使用刚体边界速度; 没有刚体边界时等价于静止墙速度0.
+                        glm::ivec3 const cell(i, j, k);
+                        auto const fluidWeight = [&](glm::ivec3 const & neighbor) -> float {
+                            if (! IsInsideGrid(neighbor)) return 0.0f;
+                            return m_s[index2GridOffset(neighbor)];
+                        };
+                        auto const faceVelocity = [&](glm::ivec3 const & face, glm::ivec3 const & neighbor, int dir) -> float {
+                            if (! IsInsideGrid(neighbor) || IsCellSolid(neighbor)) {
+                                return SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                            }
+                            if (! isValidVelocity(face.x, face.y, face.z, dir)) return 0.0f;
+                            return m_vel[index2GridOffset(face)][dir];
+                        };
 
                         // 1. 计算该格点的速度散度 (右-左 + 上-下 + 前-后)
+                        //    与固体相邻的面使用刚体写入的运动边界速度; 未写入时等价于静止墙速度0.
                         float divergence = 0.0f;
                         // 流入面 (左/下/后) 贡献为负
-                        if (isValidVelocity(i, j, k, 0))
-                            divergence -= m_vel[id].x;
-                        if (isValidVelocity(i, j, k, 1))
-                            divergence -= m_vel[id].y;
-                        if (isValidVelocity(i, j, k, 2))
-                            divergence -= m_vel[id].z;
+                        divergence -= faceVelocity(cell, cell + glm::ivec3(-1, 0, 0), 0);
+                        divergence -= faceVelocity(cell, cell + glm::ivec3(0, -1, 0), 1);
+                        divergence -= faceVelocity(cell, cell + glm::ivec3(0, 0, -1), 2);
                         // 流出面 (右/上/前) 贡献为正
-                        if (isValidVelocity(i + 1, j, k, 0))
-                            divergence += m_vel[index2GridOffset(glm::ivec3(i + 1, j, k))].x;
-                        if (isValidVelocity(i, j + 1, k, 1))
-                            divergence += m_vel[index2GridOffset(glm::ivec3(i, j + 1, k))].y;
-                        if (isValidVelocity(i, j, k + 1, 2))
-                            divergence += m_vel[index2GridOffset(glm::ivec3(i, j, k + 1))].z;
+                        divergence += faceVelocity(cell + glm::ivec3(1, 0, 0), cell + glm::ivec3(1, 0, 0), 0);
+                        divergence += faceVelocity(cell + glm::ivec3(0, 1, 0), cell + glm::ivec3(0, 1, 0), 1);
+                        divergence += faceVelocity(cell + glm::ivec3(0, 0, 1), cell + glm::ivec3(0, 0, 1), 2);
 
                         // 2. 过松弛 (加速收敛)
                         divergence *= overRelaxation;
@@ -411,30 +424,30 @@ namespace VCX::MainScene {
                         // 4. 计算6个邻居的流体权重和
                         //    固体邻居贡献 m_s=0, 自然不计入
                         float s = 0.0f;
-                        s += m_s[index2GridOffset(glm::ivec3(i + 1, j, k))];
-                        s += m_s[index2GridOffset(glm::ivec3(i - 1, j, k))];
-                        s += m_s[index2GridOffset(glm::ivec3(i, j - 1, k))];
-                        s += m_s[index2GridOffset(glm::ivec3(i, j + 1, k))];
-                        s += m_s[index2GridOffset(glm::ivec3(i, j, k + 1))];
-                        s += m_s[index2GridOffset(glm::ivec3(i, j, k - 1))];
+                        s += fluidWeight(cell + glm::ivec3(1, 0, 0));
+                        s += fluidWeight(cell + glm::ivec3(-1, 0, 0));
+                        s += fluidWeight(cell + glm::ivec3(0, -1, 0));
+                        s += fluidWeight(cell + glm::ivec3(0, 1, 0));
+                        s += fluidWeight(cell + glm::ivec3(0, 0, 1));
+                        s += fluidWeight(cell + glm::ivec3(0, 0, -1));
 
                         if (s < 1e-6f) continue;
 
                         // 5. 将散度修正按邻居权重分配到各速度面
                         //    流体邻居权重高 → 承担更多修正; 固体邻居 → 不修正
                         if (isValidVelocity(i, j, k, 0))
-                            m_vel[id].x += divergence * m_s[index2GridOffset(glm::ivec3(i - 1, j, k))] / s;
+                            m_vel[id].x += divergence * fluidWeight(cell + glm::ivec3(-1, 0, 0)) / s;
                         if (isValidVelocity(i, j, k, 1))
-                            m_vel[id].y += divergence * m_s[index2GridOffset(glm::ivec3(i, j - 1, k))] / s;
+                            m_vel[id].y += divergence * fluidWeight(cell + glm::ivec3(0, -1, 0)) / s;
                         if (isValidVelocity(i, j, k, 2))
-                            m_vel[id].z += divergence * m_s[index2GridOffset(glm::ivec3(i, j, k - 1))] / s;
+                            m_vel[id].z += divergence * fluidWeight(cell + glm::ivec3(0, 0, -1)) / s;
 
                         if (isValidVelocity(i + 1, j, k, 0))
-                            m_vel[index2GridOffset(glm::ivec3(i + 1, j, k))].x -= divergence * m_s[index2GridOffset(glm::ivec3(i + 1, j, k))] / s;
+                            m_vel[index2GridOffset(glm::ivec3(i + 1, j, k))].x -= divergence * fluidWeight(cell + glm::ivec3(1, 0, 0)) / s;
                         if (isValidVelocity(i, j + 1, k, 1))
-                            m_vel[index2GridOffset(glm::ivec3(i, j + 1, k))].y -= divergence * m_s[index2GridOffset(glm::ivec3(i, j + 1, k))] / s;
+                            m_vel[index2GridOffset(glm::ivec3(i, j + 1, k))].y -= divergence * fluidWeight(cell + glm::ivec3(0, 1, 0)) / s;
                         if (isValidVelocity(i, j, k + 1, 2))
-                            m_vel[index2GridOffset(glm::ivec3(i, j, k + 1))].z -= divergence * m_s[index2GridOffset(glm::ivec3(i, j, k + 1))] / s;
+                            m_vel[index2GridOffset(glm::ivec3(i, j, k + 1))].z -= divergence * fluidWeight(cell + glm::ivec3(0, 0, 1)) / s;
 
                         // 6. 累积压力 (用于可视化和分析)
                         m_p[id] += divergence * m_h / (s * dt);
@@ -786,7 +799,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.5f, 0.6f, 0.8f };
+        glm::vec3 relWater = { 0.6f, 0.7f, 0.8f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;
@@ -828,6 +841,10 @@ namespace VCX::MainScene {
         m_vel.resize(m_iNumCells, glm::vec3(0.0f));
         m_pre_vel.clear();
         m_pre_vel.resize(m_iNumCells, glm::vec3(0.0f));
+        m_solidVel.clear();
+        m_solidVel.resize(m_iNumCells, glm::vec3(0.0f));
+        m_solidVelMask.clear();
+        m_solidVelMask.resize(m_iNumCells, glm::ivec3(0));
         for (int i = 0; i < 3; ++i) {
             m_near_num[i].clear();
             m_near_num[i].resize(m_iNumCells, 0.0f);
@@ -929,6 +946,32 @@ namespace VCX::MainScene {
         if (IsInsideGrid(idx)) {
             m_s[index2GridOffset(idx)] = solid ? 0.0f : 1.0f;
         }
+    }
+
+    void FluidSimulator::ResetSolidBoundaryVelocity() {
+        std::fill(m_solidVel.begin(), m_solidVel.end(), glm::vec3(0.0f));
+        std::fill(m_solidVelMask.begin(), m_solidVelMask.end(), glm::ivec3(0));
+    }
+
+    void FluidSimulator::SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity) {
+        if (! isVelocityFaceInRange(idx.x, idx.y, idx.z, dir)) return;
+
+        int const id = index2GridOffset(idx);
+        m_solidVel[id][dir] = velocity;
+        m_solidVelMask[id][dir] = 1;
+        m_vel[id][dir] = velocity;
+        m_pre_vel[id][dir] = velocity;
+    }
+
+    bool FluidSimulator::HasSolidBoundaryVelocity(int i, int j, int k, int dir) const {
+        if (! isVelocityFaceInRange(i, j, k, dir)) return false;
+        if (m_solidVelMask.empty()) return false;
+        return m_solidVelMask[index2GridOffset(glm::ivec3(i, j, k))][dir] != 0;
+    }
+
+    float FluidSimulator::SolidBoundaryVelocity(int i, int j, int k, int dir) const {
+        if (! HasSolidBoundaryVelocity(i, j, k, dir)) return 0.0f;
+        return m_solidVel[index2GridOffset(glm::ivec3(i, j, k))][dir];
     }
 
     bool FluidSimulator::IsCellSolid(glm::ivec3 idx) const {
