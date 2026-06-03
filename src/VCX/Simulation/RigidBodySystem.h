@@ -26,17 +26,18 @@ namespace VCX::MainScene {
     struct RigidContact {
         int             idA         = -1;
         int             idB         = -1;
-        Eigen::Vector3f position    = Eigen::Vector3f::Zero();
-        Eigen::Vector3f normal      = Eigen::Vector3f::UnitY();
+        Eigen::Vector3f position    = Eigen::Vector3f::Zero(); // 世界坐标下的接触点
+        Eigen::Vector3f normal      = Eigen::Vector3f::UnitY(); // 从 A 指向 B 的接触法线
         float           penetration = 0.0f;
 
-        // Sequential impulse caches used within one velocity solve.
+        // 同一个接触点迭代时用的累计冲量，主要是为了堆叠时不乱跳。
         float           accumulatedNormalImpulse  = 0.0f;
         float           accumulatedTangentImpulse = 0.0f;
         Eigen::Vector3f tangent                   = Eigen::Vector3f::Zero();
         bool            tangentInitialized        = false;
     };
 
+    // 给后面的流固耦合留的表面采样点。刚体这边只负责给点、法线和面积。
     struct RigidSurfaceSample {
         int             bodyId   = -1;
         Eigen::Vector3f position = Eigen::Vector3f::Zero();
@@ -46,13 +47,14 @@ namespace VCX::MainScene {
 
     struct RigidBody {
         RigidBodyShape     shape = RigidBodyShape::Box;
-        Eigen::Vector3f    dim   = Eigen::Vector3f::Ones(); // box: full size; sphere: diameter in x/y/z
-        Eigen::Vector3f    x     = Eigen::Vector3f::Zero();
-        Eigen::Quaternionf q     = Eigen::Quaternionf::Identity();
+        Eigen::Vector3f    dim   = Eigen::Vector3f::Ones(); // 盒子是完整长宽高，球用直径
+        Eigen::Vector3f    x     = Eigen::Vector3f::Zero(); // 质心位置
+        Eigen::Quaternionf q     = Eigen::Quaternionf::Identity(); // 姿态
 
-        Eigen::Vector3f v = Eigen::Vector3f::Zero();
-        Eigen::Vector3f w = Eigen::Vector3f::Zero();
+        Eigen::Vector3f v = Eigen::Vector3f::Zero(); // 线速度
+        Eigen::Vector3f w = Eigen::Vector3f::Zero(); // 角速度
 
+        // 每个时间步里暂存外力，Step 结束会清掉。
         Eigen::Vector3f force  = Eigen::Vector3f::Zero();
         Eigen::Vector3f torque = Eigen::Vector3f::Zero();
 
@@ -66,6 +68,7 @@ namespace VCX::MainScene {
         bool        useGravity  = true;
         std::string name;
 
+        // 刚体局部坐标系下的转动惯量。求解时再转到世界坐标。
         Eigen::Matrix3f inertiaBody    = Eigen::Matrix3f::Identity();
         Eigen::Matrix3f inertiaBodyInv = Eigen::Matrix3f::Identity();
 
@@ -89,8 +92,8 @@ namespace VCX::MainScene {
         std::vector<RigidContact> Contacts;
 
         Eigen::Vector3f Gravity                      = Eigen::Vector3f(0.0f, -9.8f, 0.0f);
-        int             ImpulseIterations            = 10;
-        int             Substeps                     = 6;
+        int             ImpulseIterations            = 10; // 接触冲量迭代次数
+        int             Substeps                     = 6;  // 刚体内部子步
         float           LinearDamping                = 0.01f;
         float           AngularDamping               = 0.01f;
         float           RestitutionVelocityThreshold = 0.25f;
@@ -98,9 +101,9 @@ namespace VCX::MainScene {
         float           PositionCorrectionSlop       = 0.0025f;
 
         bool  EnableFriction              = true;
-        bool  SortContactsForStability    = false;
+        bool  SortContactsForStability    = false; // 堆叠时先处理靠下的接触
         bool  EnableRestingStabilization  = false;
-        bool  AlternateIterationSweep     = false;
+        bool  AlternateIterationSweep     = false; // 迭代时正反扫交替，少一点方向偏差
         bool  UseSequentialImpulseCaching = true;
         float RestingLinearThreshold      = 0.08f;
         float RestingAngularThreshold     = 0.12f;
@@ -119,6 +122,7 @@ namespace VCX::MainScene {
         void StabilizeRestingContacts();
         void ResolveTankBounds(float minBound, float maxBound);
 
+        // 注意这里传的是作用点，不是默认打在质心上；鼠标拖拽和水压力都要用这个。
         void ApplyForce(int id, Eigen::Vector3f const & forceWorld, Eigen::Vector3f const & worldPoint);
         void ApplyForceToCenter(int id, Eigen::Vector3f const & forceWorld);
         void ApplyTorque(int id, Eigen::Vector3f const & torqueWorld);
@@ -127,6 +131,7 @@ namespace VCX::MainScene {
 
         int             GetFirstDynamicBody() const;
         Eigen::Vector3f VelocityAtPoint(int id, Eigen::Vector3f const & worldPoint) const;
+        // 后面算流体压力时可以直接遍历这些采样点。
         void            CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const;
         bool            IsValidBody(int id) const;
 

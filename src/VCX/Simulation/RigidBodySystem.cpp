@@ -58,6 +58,7 @@ namespace VCX::MainScene {
     }
 
     void RigidBody::UpdateMassProperties() {
+        // 改质量、尺寸或形状后都要重新算一次。
         if (isStatic || mass <= kEps) {
             mass    = std::numeric_limits<float>::infinity();
             invMass = 0.0f;
@@ -164,6 +165,7 @@ namespace VCX::MainScene {
     }
 
     Eigen::Vector3f RigidBody::ClosestSurfacePoint(Eigen::Vector3f const & worldPoint) const {
+        // 鼠标选点和粒子推出刚体时都会用到这个近似表面点。
         Eigen::Vector3f const local = WorldToLocal(worldPoint);
         if (shape == RigidBodyShape::Sphere) {
             float const r = 0.5f * dim.x();
@@ -217,10 +219,7 @@ namespace VCX::MainScene {
     void RigidBodySystem::SetupDefaultScene(RigidBodyPreset preset) {
         Clear();
 
-        // These values are copied from the stable stacking setting in Lab1.
-        // Compared with the earlier Lab4 version, the higher substep/iteration count,
-        // contact sorting, alternating sweep, and resting stabilization are the main
-        // reasons why objects do not keep shaking while resting on a static surface.
+        // 这里基本沿用 Lab1 里比较稳的那组参数。Lab4 物体更小，所以休眠阈值另外调低了。
         Substeps                     = 16;
         ImpulseIterations            = 34;
         LinearDamping                = 0.01f;
@@ -257,10 +256,8 @@ namespace VCX::MainScene {
             float constexpr span  = 1.08f;
             float constexpr c     = inner + 0.5f * thick;
 
-            // Six static walls are used only for rigid-body collision response.
-            // They are handled by the same FCL + sequential impulse pipeline as Lab1,
-            // instead of a separate AABB post-correction.  This is the key change that
-            // reduces the resting jitter seen against the tank frame.
+            // 水槽六个面也放进刚体系统里，这样撞墙和 Lab1 撞静态地板是同一套解法。
+            // 不再靠最后的 AABB 反弹硬推，抖动会少很多。
             addTankWall("tank_neg_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f(-c, 0.0f, 0.0f));
             addTankWall("tank_pos_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f( c, 0.0f, 0.0f));
             addTankWall("tank_neg_y", Eigen::Vector3f(span,  thick, span), Eigen::Vector3f(0.0f, -c, 0.0f));
@@ -269,9 +266,7 @@ namespace VCX::MainScene {
             addTankWall("tank_pos_z", Eigen::Vector3f(span,  span,  thick), Eigen::Vector3f(0.0f, 0.0f,  c));
         };
 
-        // The Lab4 fluid tank is currently [-0.5, 0.5]^3.  These presets keep the
-        // Lab1 rigid-body method, but scale the demos down so that they can later
-        // be rasterized into the fluid grid for solid-fluid coupling.
+        // 下面几个预设都按 Lab4 水槽尺寸缩小过，后面写入流体网格也方便。
         switch (preset) {
         case RigidBodyPreset::BoxCollision: {
             RigidBody a;
@@ -400,6 +395,7 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::ApplyForce(int id, Eigen::Vector3f const & forceWorld, Eigen::Vector3f const & worldPoint) {
+        // 力不一定打在质心上，所以这里顺手把力矩也加上。
         if (! IsValidBody(id)) return;
         auto & b = Bodies[id];
         if (b.isStatic) return;
@@ -420,6 +416,7 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::ApplyImpulse(int id, Eigen::Vector3f const & impulseWorld, Eigen::Vector3f const & worldPoint) {
+        // 碰撞瞬间用冲量改速度；偏心冲量会直接改角速度。
         if (! IsValidBody(id)) return;
         auto & b = Bodies[id];
         if (b.isStatic) return;
@@ -447,6 +444,7 @@ namespace VCX::MainScene {
 
 
     void RigidBodySystem::CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const {
+        // 这里只采样几何表面，不碰流体；压力怎么用由 coupler 那边决定。
         if (! IsValidBody(bodyId)) return;
         auto const & body = Bodies[bodyId];
 
@@ -594,8 +592,7 @@ namespace VCX::MainScene {
             Eigen::Vector3f const linearAcc  = b.invMass * (b.force + gravityForce);
             Eigen::Vector3f const angularAcc = b.GetWorldInertiaInv() * b.torque;
 
-            // Same explicit Euler style as Lab1: position/orientation are advanced
-            // from the current velocities, then velocities are advanced by current forces.
+            // 和 Lab1 一样用显式欧拉：先按当前速度走一步，再用这一帧的力更新速度。
             b.x += dt * b.v;
             b.q = SmallRotationFromAngularVelocity(b.w, dt, b.q);
 
@@ -676,6 +673,7 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::resolveVelocityContact(RigidContact & contact) {
+        // 一个接触点的速度约束：先法向冲量，再摩擦冲量。
         auto & a = Bodies[contact.idA];
         auto & b = Bodies[contact.idB];
         if (a.isStatic && b.isStatic) return;
@@ -778,6 +776,7 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::PositionalCorrection() {
+        // 速度解算后再推开一点，防止两个刚体一直嵌在一起。
         for (auto const & c : Contacts) {
             auto & a = Bodies[c.idA];
             auto & b = Bodies[c.idB];
@@ -794,12 +793,8 @@ namespace VCX::MainScene {
     }
 
     void RigidBodySystem::StabilizeRestingContacts() {
-        // Lab1 used resting stabilization to kill tiny jitter.  In this Lab4 tank,
-        // the bodies are much smaller; directly using Lab1 thresholds can freeze a
-        // box while it is still tilted.  Therefore we only allow sleeping when the
-        // body has enough static-wall/static-obstacle contacts and its residual
-        // velocity is very small.  A box on one corner/edge should keep rotating; a
-        // box lying on a face can sleep.
+        // 休眠只处理很小的残余抖动。Lab4 尺寸比 Lab1 小，阈值不能设太大。
+        // 盒子如果只是一角/一边碰到地面，就先不让它睡眠，避免斜着被冻住。
         std::vector<int> staticContactCount(Bodies.size(), 0);
         for (auto const & c : Contacts) {
             if (c.penetration <= 0.0f) continue;
@@ -835,10 +830,8 @@ namespace VCX::MainScene {
             }
         }
 
-        // When the Lab1-style tank walls exist, wall contacts are already solved by
-        // FCL + sequential impulses inside Step().  Running the old AABB correction
-        // afterwards would fight the contact solver and cause visible jitter, so this
-        // function becomes a very conservative safety net only.
+        // 默认预设里已经有 tank_ 静态墙体了，普通撞墙交给 FCL 接触求解。
+        // 这里保留成保险：真的飞出水槽很远时才拉回来。
         if (hasLab1TankWalls) {
             float const hardLimit = std::max(std::abs(minBound), std::abs(maxBound)) + 0.20f;
             for (auto & body : Bodies) {
@@ -863,8 +856,7 @@ namespace VCX::MainScene {
             return;
         }
 
-        // Fallback for scenes without explicit tank wall bodies.  This keeps the old
-        // protective behavior, but it is not used by the default Lab4 rigid presets.
+        // 兼容没有 tank_ 墙体的旧场景，默认几个预设一般走不到这里。
         for (auto & body : Bodies) {
             if (body.isStatic) continue;
 
