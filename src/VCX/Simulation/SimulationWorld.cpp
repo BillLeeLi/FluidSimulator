@@ -5,10 +5,44 @@
 
 namespace VCX::MainScene {
 
+    std::vector<SimulationWorld::RigidBodyResetFlag> SimulationWorld::CaptureRigidBodyResetFlags() const {
+        std::vector<RigidBodyResetFlag> flags;
+        flags.reserve(_rigidBodies.Bodies.size());
+
+        for (int i = 0; i < static_cast<int>(_rigidBodies.Bodies.size()); ++i) {
+            if (_rigidBodies.IsInternalTankBoundary(i)) continue;
+            auto const & body = _rigidBodies.Bodies[i];
+            flags.push_back(RigidBodyResetFlag { body.name, body.isStatic, body.useGravity });
+        }
+        return flags;
+    }
+
+    void SimulationWorld::RestoreRigidBodyResetFlags(std::vector<RigidBodyResetFlag> const & flags) {
+        for (auto const & saved : flags) {
+            for (int i = 0; i < static_cast<int>(_rigidBodies.Bodies.size()); ++i) {
+                if (_rigidBodies.IsInternalTankBoundary(i)) continue;
+                if (_rigidBodies.Bodies[i].name != saved.name) continue;
+
+                _rigidBodies.SetBodyStatic(i, saved.isStatic);
+                _rigidBodies.SetBodyGravity(i, saved.useGravity);
+                break;
+            }
+        }
+    }
+
     void SimulationWorld::Setup(int res) {
+        auto const oldFlags = CaptureRigidBodyResetFlags();
+        bool const oldFluidGravity = _fluid.enableGravity;
+        bool const oldSurfaceModeling = _fluid.enableSurfaceModeling;
+
         _resolution = std::max(1, res);
         _fluid.setupScene(_resolution);
+        _fluid.enableGravity = oldFluidGravity;
+        _fluid.SetSurfaceModelingEnabled(oldSurfaceModeling);
+
         _rigidBodies.SetupDefaultScene(_rigidBodyPreset);
+        RestoreRigidBodyResetFlags(oldFlags);
+
         _timeAccumulator = 0.0f;
         _lastSimTimeMs   = 0.0f;
         _externalForce.setZero();
@@ -144,7 +178,24 @@ namespace VCX::MainScene {
             _selectedRigidBody = -1;
             return;
         }
-        _selectedRigidBody = std::clamp(id, 0, static_cast<int>(_rigidBodies.Bodies.size()) - 1);
+
+        int const n = static_cast<int>(_rigidBodies.Bodies.size());
+        int const start = std::clamp(id, 0, n - 1);
+
+        for (int i = start; i < n; ++i) {
+            if (! _rigidBodies.IsInternalTankBoundary(i)) {
+                _selectedRigidBody = i;
+                return;
+            }
+        }
+        for (int i = start - 1; i >= 0; --i) {
+            if (! _rigidBodies.IsInternalTankBoundary(i)) {
+                _selectedRigidBody = i;
+                return;
+            }
+        }
+
+        _selectedRigidBody = -1;
     }
 
     void SimulationWorld::SetRigidKeyboardForce(float force) {

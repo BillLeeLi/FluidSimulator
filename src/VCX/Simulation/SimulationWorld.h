@@ -4,6 +4,9 @@
 #include "Simulation/FluidSolidCoupler.h"
 #include "Simulation/RigidBodySystem.h"
 
+#include <string>
+#include <vector>
+
 namespace VCX::MainScene {
 
     class SimulationWorld {
@@ -74,6 +77,15 @@ namespace VCX::MainScene {
         int _selectedRigidBody { 0 };
         float _rigidKeyboardForce { 30.0f };
         RigidBodyPreset _rigidBodyPreset { RigidBodyPreset::FluidCouplingMixed };
+
+        struct RigidBodyResetFlag {
+            std::string name;
+            bool        isStatic   = false;
+            bool        useGravity = true;
+        };
+
+        std::vector<RigidBodyResetFlag> CaptureRigidBodyResetFlags() const;
+        void RestoreRigidBodyResetFlags(std::vector<RigidBodyResetFlag> const & flags);
     };
 
 } // namespace VCX::MainScene
