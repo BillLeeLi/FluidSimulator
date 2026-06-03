@@ -293,15 +293,29 @@ namespace VCX::MainScene {
             RebuildRigidBodyRenderItem();
         }
 
-        ImGui::Text("Rigid Bodies: %d", int(rigid.Bodies.size()));
+        std::vector<int> visibleBodies;
+        visibleBodies.reserve(rigid.Bodies.size());
+        for (int i = 0; i < static_cast<int>(rigid.Bodies.size()); ++i) {
+            if (! rigid.IsInternalTankBoundary(i)) visibleBodies.push_back(i);
+        }
+
+        ImGui::Text("Rigid Bodies: %d visible / %d total", int(visibleBodies.size()), int(rigid.Bodies.size()));
         ImGui::Text("Contacts: %d", int(rigid.Contacts.size()));
 
         int selected = _world.SelectedRigidBody();
-        if (! rigid.Bodies.empty()) {
-            selected = std::clamp(selected, 0, int(rigid.Bodies.size()) - 1);
-            if (ImGui::SliderInt("Selected Body", &selected, 0, int(rigid.Bodies.size()) - 1)) {
-                _world.SetSelectedRigidBody(selected);
+        if (! visibleBodies.empty()) {
+            int selectedVisible = 0;
+            for (int i = 0; i < static_cast<int>(visibleBodies.size()); ++i) {
+                if (visibleBodies[i] == selected) {
+                    selectedVisible = i;
+                    break;
+                }
             }
+
+            if (ImGui::SliderInt("Selected Body", &selectedVisible, 0, int(visibleBodies.size()) - 1)) {
+                _world.SetSelectedRigidBody(visibleBodies[selectedVisible]);
+            }
+            selected = visibleBodies[std::clamp(selectedVisible, 0, int(visibleBodies.size()) - 1)];
 
             auto & body = rigid.Bodies[selected];
             ImGui::Text("Name: %s", body.name.c_str());

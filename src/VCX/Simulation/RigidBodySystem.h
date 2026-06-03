@@ -134,6 +134,7 @@ namespace VCX::MainScene {
         // 后面算流体压力时可以直接遍历这些采样点。
         void            CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const;
         bool            IsValidBody(int id) const;
+        bool            IsInternalTankBoundary(int id) const;
 
         void SetBodyMass(int id, float mass);
         void SetBodyDim(int id, Eigen::Vector3f const & dim);

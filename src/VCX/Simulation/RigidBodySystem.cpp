@@ -251,13 +251,14 @@ namespace VCX::MainScene {
         };
 
         auto addLab1StyleTankBoundary = [&]() {
-            float constexpr inner = 0.43f;
-            float constexpr thick = 0.08f;
-            float constexpr span  = 1.08f;
-            float constexpr c     = inner + 0.5f * thick;
+            float constexpr inner     = 0.43f;
+            float constexpr baseThick = 0.08f;
+            float constexpr thick     = 20.0f * baseThick;
+            float constexpr span      = 2.0f * (inner + thick);
+            float constexpr c         = inner + 0.5f * thick;
 
-            // 水槽六个面也放进刚体系统里，这样撞墙和 Lab1 撞静态地板是同一套解法。
-            // 不再靠最后的 AABB 反弹硬推，抖动会少很多。
+            // 碰撞面仍然在原来的水槽内壁，墙体向外加厚，防止高速物体一帧穿出去。
+            // tank_ 开头的墙只参与碰撞，不参与选择和绘制。
             addTankWall("tank_neg_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f(-c, 0.0f, 0.0f));
             addTankWall("tank_pos_x", Eigen::Vector3f(thick, span,  span), Eigen::Vector3f( c, 0.0f, 0.0f));
             addTankWall("tank_neg_y", Eigen::Vector3f(span,  thick, span), Eigen::Vector3f(0.0f, -c, 0.0f));
@@ -385,6 +386,12 @@ namespace VCX::MainScene {
 
     bool RigidBodySystem::IsValidBody(int id) const {
         return id >= 0 && id < static_cast<int>(Bodies.size());
+    }
+
+    bool RigidBodySystem::IsInternalTankBoundary(int id) const {
+        if (! IsValidBody(id)) return false;
+        auto const & body = Bodies[id];
+        return body.isStatic && body.name.rfind("tank_", 0) == 0;
     }
 
     void RigidBodySystem::ClearForces() {
