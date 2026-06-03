@@ -114,9 +114,11 @@ namespace VCX::MainScene {
             // the old FLIP fluid behavior is not disturbed before coupling is added.
             _fluid.integrateParticles(sdt);
             _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            _coupler.ProjectParticlesOutOfRigidBodies(_fluid, _rigidBodies);
             if (_separateParticles)
                 _fluid.pushParticlesApart(_numParticleIters);
             _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            _coupler.ProjectParticlesOutOfRigidBodies(_fluid, _rigidBodies);
             if (_fluid.enableSurfaceModeling) {
                 _fluid.EnsureSurfaceFields();
                 _fluid.updateSurfaceField();

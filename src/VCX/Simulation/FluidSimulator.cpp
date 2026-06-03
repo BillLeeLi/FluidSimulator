@@ -786,7 +786,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.5f, 0.6f, 0.5f };
+        glm::vec3 relWater = { 0.5f, 0.6f, 0.8f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;
@@ -914,7 +914,12 @@ namespace VCX::MainScene {
         for (int i = 0; i < m_iCellX; i++) {
             for (int j = 0; j < m_iCellY; j++) {
                 for (int k = 0; k < m_iCellZ; k++) {
-                    m_s[index2GridOffset(glm::ivec3(i, j, k))] = 0.0f;
+                    float s = 1.0f;
+                    if (i == 0 || i == m_iCellX - 1
+                        || j == 0 || j == m_iCellY - 1
+                        || k == 0 || k == m_iCellZ - 1)
+                        s = 0.0f;
+                    m_s[index2GridOffset(glm::ivec3(i, j, k))] = s;
                 }
             }
         }
