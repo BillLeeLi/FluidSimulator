@@ -799,7 +799,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.6f, 0.7f, 0.8f };
+        glm::vec3 relWater = { 0.8f, 0.5f, 0.8f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;

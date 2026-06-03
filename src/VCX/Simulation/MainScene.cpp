@@ -376,7 +376,7 @@ namespace VCX::MainScene {
         ImGui::Checkbox("Enable Pressure Force", &coupler.enablePressureForce);
         ImGui::Checkbox("Enable Moving Solid Velocity", &coupler.enableMovingSolidVelocity);
         ImGui::Checkbox("Enable Particle Collision Impulse", &coupler.enableParticleCollisionImpulse);
-        ImGui::SliderFloat("Pressure Force Scale", &coupler.pressureForceScale, 0.0f, 50.0f);
+        ImGui::SliderFloat("Pressure Force Scale", &coupler.pressureForceScale, 0.0f, 500.0f);
         ImGui::SliderFloat("Max Pressure For Force", &coupler.maxPressureForForce, 0.0f, 400.0f);
         ImGui::SliderFloat("Particle Impulse Scale", &coupler.particleImpulseScale, 0.0f, 1.0f);
 

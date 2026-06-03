@@ -70,6 +70,7 @@ namespace VCX::MainScene {
                 glm::ivec3(std::max(lo.x, hi.x), std::max(lo.y, hi.y), std::max(lo.z, hi.z)),
             };
         }
+
     } // namespace
 
     void FluidSolidCoupler::ResetDebug() {
@@ -243,14 +244,8 @@ namespace VCX::MainScene {
 
             for (RigidSurfaceSample const & sample : samples) {
                 Eigen::Vector3f const normal = SafeNormalized(sample.normal);
-                glm::vec3 const      probe  = ToGlm(sample.position + normal * (0.5f * fluid.m_h));
-                glm::ivec3 const     cell   = fluid.worldToCell(probe);
-                if (! fluid.IsInsideGrid(cell)) continue;
-
-                int const cellId = fluid.GridIndex(cell);
-                if (fluid.m_type[cellId] != FLUID_CELL) continue;
-
-                float const pressure = std::clamp(std::max(0.0f, fluid.SamplePressure(probe)), 0.0f, maxPressureForForce);
+                glm::vec3 const      probe  = ToGlm(sample.position + normal * (0.25f * fluid.m_h));
+                float const pressure = std::clamp(std::max(0.0f, -fluid.SamplePressure(probe)), 0.0f, maxPressureForForce);
                 if (pressure <= 0.0f || pressureForceScale <= 0.0f) continue;
 
                 Eigen::Vector3f const force = -normal * (pressure * sample.area * pressureForceScale);

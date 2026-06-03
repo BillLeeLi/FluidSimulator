@@ -15,9 +15,9 @@ namespace VCX::MainScene {
         bool  enablePressureForce  { true };
         bool  enableMovingSolidVelocity { true };
         bool  enableParticleCollisionImpulse { true };
-        float pressureForceScale   { 2.0f };
+        float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
-        float particleImpulseScale { 0.05f };
+        float particleImpulseScale { 0.5f };
 
         void ResetDebug();
         // 将所有穿透刚体的粒子投影到最近的表面点，并调整速度以消除穿透分量
