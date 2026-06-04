@@ -86,25 +86,11 @@ namespace VCX::MainScene {
         }
     }
 
-    void FluidSimulator::handleParticleCollisions(glm::vec3 obstaclePos, float obstacleRadius, glm::vec3 obstacleVel) {
+    void FluidSimulator::handleParticleCollisions() {
         float const minBound = -0.5f + m_h + m_particleRadius;
         float const maxBound = 0.5f - m_h - m_particleRadius;
 
         for (int i = 0; i < m_iNumSpheres; i++) {
-            // —— 障碍球碰撞 ——
-            glm::vec3 diff = m_particlePos[i] - obstaclePos;
-            float     dist = glm::length(diff);
-            float     minD = obstacleRadius + m_particleRadius;
-            if (dist < minD && dist > 1e-8f) {
-                glm::vec3 const n = diff / dist;
-                // 将粒子推到障碍球表面外侧
-                m_particlePos[i] = obstaclePos + n * minD;
-                // 反射相对于障碍物的速度
-                float vn = glm::dot(m_particleVel[i] - obstacleVel, n);
-                if (vn < 0.0f)
-                    m_particleVel[i] -= vn * n;
-            }
-
             // —— 水槽六面边界 (Solid at i=0, i>=CX-2, etc.) ——
             // x方向
             if (m_particlePos[i].x < minBound) {
@@ -791,7 +777,73 @@ namespace VCX::MainScene {
             maxPressure = std::max(maxPressure, std::abs(m_p[id]));
 
         for (int i = 0; i < m_iNumSpheres; ++i) {
-            float p            = SamplePressure(m_particlePos[i]);
+            // 仅从有效流体单元采样压力，避免把 solid/empty 的 0 压力混入边界粒子着色。
+            glm::vec3 g  = (m_particlePos[i] + glm::vec3(0.5f)) * m_fInvSpacing;
+            int       ix = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_iCellX - 2);
+            int       iy = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_iCellY - 2);
+            int       iz = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_iCellZ - 2);
+            float     fx = g.x - ix;
+            float     fy = g.y - iy;
+            float     fz = g.z - iz;
+
+            int ix0 = ix, ix1 = std::min(ix + 1, m_iCellX - 1);
+            int iy0 = iy, iy1 = std::min(iy + 1, m_iCellY - 1);
+            int iz0 = iz, iz1 = std::min(iz + 1, m_iCellZ - 1);
+
+            auto accumulatePressure = [&](int x, int y, int z, float w, float & sum, float & wsum) {
+                int const id = index2GridOffset(glm::ivec3(x, y, z));
+                if (m_type[id] != FLUID_CELL || w <= 0.0f) return;
+                sum += w * m_p[id];
+                wsum += w;
+            };
+
+            float pressureSum    = 0.0f;
+            float pressureWeight = 0.0f;
+
+            for (int dx = 0; dx <= 1; ++dx) {
+                float wx = dx ? fx : (1.0f - fx);
+                int   sx = dx ? ix1 : ix0;
+                for (int dy = 0; dy <= 1; ++dy) {
+                    float wy = dy ? fy : (1.0f - fy);
+                    int   sy = dy ? iy1 : iy0;
+                    for (int dz = 0; dz <= 1; ++dz) {
+                        float wz = dz ? fz : (1.0f - fz);
+                        int   sz = dz ? iz1 : iz0;
+                        accumulatePressure(sx, sy, sz, wx * wy * wz, pressureSum, pressureWeight);
+                    }
+                }
+            }
+
+            float p = 0.0f;
+            if (pressureWeight > 1e-6f) {
+                p = pressureSum / pressureWeight;
+            } else {
+                int const centerId = index2GridOffset(worldToCell(m_particlePos[i]));
+                if (m_type[centerId] == FLUID_CELL) {
+                    p = m_p[centerId];
+                } else {
+                    float nearestDist2 = std::numeric_limits<float>::max();
+                    for (int dx = 0; dx <= 1; ++dx) {
+                        int sx = dx ? ix1 : ix0;
+                        for (int dy = 0; dy <= 1; ++dy) {
+                            int sy = dy ? iy1 : iy0;
+                            for (int dz = 0; dz <= 1; ++dz) {
+                                int const sz = dz ? iz1 : iz0;
+                                int const id = index2GridOffset(glm::ivec3(sx, sy, sz));
+                                if (m_type[id] != FLUID_CELL) continue;
+
+                                glm::vec3 const cellPos = glm::vec3(sx, sy, sz) * m_h + glm::vec3(-0.5f);
+                                float const     dist2   = glm::dot(cellPos - m_particlePos[i], cellPos - m_particlePos[i]);
+                                if (dist2 < nearestDist2) {
+                                    nearestDist2 = dist2;
+                                    p            = m_p[id];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
             float t            = std::abs(p) / maxPressure;
             m_particleColor[i] = ramp(t);
         }
@@ -1113,17 +1165,15 @@ namespace VCX::MainScene {
 
     void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
         float     flipRatio = m_fRatio;
-        glm::vec3 obstaclePos(0.0f);
-        glm::vec3 obstacleVel(0.0f);
-
+        
         float sdt = dt / cfg.numSubSteps;
 
         for (int step = 0; step < cfg.numSubSteps; step++) {
             integrateParticles(sdt);
-            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            handleParticleCollisions();
             if (cfg.separateParticles)
                 pushParticlesApart(cfg.numParticleIters);
-            handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            handleParticleCollisions();
             if (enableSurfaceModeling) {
                 EnsureSurfaceFields();
                 updateSurfaceField();

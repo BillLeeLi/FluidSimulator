@@ -85,7 +85,7 @@ namespace VCX::MainScene {
         void integrateParticles(float timeStep);
 
         // Step 2: 边界碰撞处理 — "无粘"边界条件
-        void handleParticleCollisions(glm::vec3 obstaclePos, float obstacleRadius, glm::vec3 obstacleVel);
+        void handleParticleCollisions();
 
         // Step 3: 粒子分离 — 防止粒子过度重叠 (O(n) 借助哈希表)
         void pushParticlesApart(int numIters);

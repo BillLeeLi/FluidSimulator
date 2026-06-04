@@ -89,9 +89,6 @@ namespace VCX::MainScene {
         float const sdt         = dt / float(numSubSteps);
         float const flipRatio   = _fluid.m_fRatio;
 
-        glm::vec3 const obstaclePos(0.0f);
-        glm::vec3 const obstacleVel(0.0f);
-
         for (int step = 0; step < numSubSteps; ++step) {
             // 1. Rigid body part.  This preserves the Lab1 style: explicit Euler
             // integration + FCL narrow-phase + sequential impulse contact solve.
@@ -115,11 +112,11 @@ namespace VCX::MainScene {
             // 2. Fluid part.  This is intentionally kept in the original order so
             // the old FLIP fluid behavior is not disturbed before coupling is added.
             _fluid.integrateParticles(sdt);
-            _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            _fluid.handleParticleCollisions();
             _coupler.ProjectParticlesOutOfRigidBodies(_fluid, _rigidBodies);
             if (_separateParticles)
                 _fluid.pushParticlesApart(_numParticleIters);
-            _fluid.handleParticleCollisions(obstaclePos, 0.0f, obstacleVel);
+            _fluid.handleParticleCollisions();
             _coupler.ProjectParticlesOutOfRigidBodies(_fluid, _rigidBodies);
             if (_fluid.enableSurfaceModeling) {
                 _fluid.EnsureSurfaceFields();
