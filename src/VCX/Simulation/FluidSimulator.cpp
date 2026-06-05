@@ -740,22 +740,35 @@ namespace VCX::MainScene {
 
     void FluidSimulator::EnsureRenderableSurfaceFields() {
         if (m_iCellX <= 1 || m_iCellY <= 1 || m_iCellZ <= 1 || m_h <= 0.0f) return;
-        int const renderScale       = std::max(1, m_renderSurfaceResolutionScale);
-        m_renderSurfaceCellX        = (m_iCellX - 1) * renderScale + 1;
-        m_renderSurfaceCellY        = (m_iCellY - 1) * renderScale + 1;
-        m_renderSurfaceCellZ        = (m_iCellZ - 1) * renderScale + 1;
-        m_renderSurfaceH            = m_h / float(renderScale);
-        m_renderSurfaceInvH         = 1.0f / m_renderSurfaceH;
-        m_renderSurfaceKernelRadius = 2.5f * m_h;
+        float const renderScale = std::max(1.0f, m_renderSurfaceResolutionScale);
+        int const   cellX       = std::max(2, int(std::round(float(m_iCellX - 1) * renderScale)) + 1);
+        int const   cellY       = std::max(2, int(std::round(float(m_iCellY - 1) * renderScale)) + 1);
+        int const   cellZ       = std::max(2, int(std::round(float(m_iCellZ - 1) * renderScale)) + 1);
+        float const renderH     = 1.0f / float(cellX - 1);
+        int const   cellCount   = cellX * cellY * cellZ;
 
-        int const renderCellCount = m_renderSurfaceCellX * m_renderSurfaceCellY * m_renderSurfaceCellZ;
-        m_renderSurfaceColor.clear();
-        m_renderSurfaceColor.resize(renderCellCount, 0.0f);
-        m_renderSurfacePhi.clear();
-        m_renderSurfacePhi.resize(renderCellCount, 0.0f);
-        m_renderSurfaceMesh.positions.clear();
-        m_renderSurfaceMesh.normals.clear();
-        m_renderSurfaceMesh.indices.clear();
+        bool const needsResize = m_renderSurfaceCellX != cellX
+            || m_renderSurfaceCellY != cellY
+            || m_renderSurfaceCellZ != cellZ
+            || m_renderSurfaceColor.size() != std::size_t(cellCount)
+            || m_renderSurfacePhi.size() != std::size_t(cellCount);
+
+        m_renderSurfaceCellX = cellX;
+        m_renderSurfaceCellY = cellY;
+        m_renderSurfaceCellZ = cellZ;
+        m_renderSurfaceH     = renderH;
+        m_renderSurfaceInvH  = 1.0f / m_renderSurfaceH;
+        if (m_renderSurfaceKernelRadius <= 0.0f)
+            m_renderSurfaceKernelRadius = 1.5f * m_h;
+
+        if (needsResize) {
+            m_renderSurfaceColor.assign(cellCount, 0.0f);
+            m_renderSurfacePhi.assign(cellCount, 0.0f);
+            m_renderSurfaceMesh.positions.clear();
+            m_renderSurfaceMesh.normals.clear();
+            m_renderSurfaceMesh.indices.clear();
+            m_renderSurfaceFrameCounter = 0;
+        }
     }
 
     void FluidSimulator::SetSurfaceModelingEnabled(bool enabled) {
@@ -863,7 +876,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.6f, 0.5f, 0.6f };
+        glm::vec3 relWater = { 0.5f, 0.6f, 0.5f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;
@@ -1202,15 +1215,17 @@ namespace VCX::MainScene {
     }
 
     void FluidSimulator::updateRenderableSurface() {
-        m_renderSurfaceMesh.positions.clear();
-        m_renderSurfaceMesh.normals.clear();
-        m_renderSurfaceMesh.indices.clear();
-
         EnsureRenderableSurfaceFields();
         if (m_iNumSpheres <= 0 || m_renderSurfaceCellX <= 1 || m_renderSurfaceCellY <= 1 || m_renderSurfaceCellZ <= 1)
             return;
 
-        buildHash();
+        int const updateInterval    = std::max(1, m_renderSurfaceUpdateInterval);
+        m_renderSurfaceFrameCounter = (m_renderSurfaceFrameCounter + 1) % updateInterval;
+        if (m_renderSurfaceFrameCounter != 0) return;
+
+        m_renderSurfaceMesh.positions.clear();
+        m_renderSurfaceMesh.normals.clear();
+        m_renderSurfaceMesh.indices.clear();
 
         int const renderCellCount = m_renderSurfaceCellX * m_renderSurfaceCellY * m_renderSurfaceCellZ;
         if (static_cast<int>(m_renderSurfaceColor.size()) != renderCellCount)
@@ -1227,10 +1242,11 @@ namespace VCX::MainScene {
         };
 
         std::fill(m_renderSurfaceColor.begin(), m_renderSurfaceColor.end(), 0.0f);
+        std::vector<unsigned char> activePoint(renderCellCount, 0); // 记录实际参与表面建模的格点，后续进行模糊时不需要遍历全部格点
 
         float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 2.5f * m_h;
         float const invR   = 1.0f / radius;
-        int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_fInvSpacing)));
+        int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_renderSurfaceInvH)));
 
         // 核函数
         auto kernel = [&](float r) {
@@ -1243,53 +1259,81 @@ namespace VCX::MainScene {
         float restFieldAccum = 0.0f;
         int   restFieldCount = 0;
 
-        // 对每个网格计算Color Field值: 遍历附近粒子并累加核函数权重
-        for (int i = 0; i < m_renderSurfaceCellX; ++i) {
-            for (int j = 0; j < m_renderSurfaceCellY; ++j) {
-                for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
-                    glm::vec3 const  p    = renderPosition(i, j, k);
-                    glm::ivec3 const slot = worldToCell(p);
+        // 对每个粒子的近邻格子计算核函数累加到color上
+        // 计算复杂度和粒子数成正比，而和场景大小无关
+        for (glm::vec3 const & particlePos : m_particlePos) {
+            glm::vec3 const grid = (particlePos + glm::vec3(0.5f)) * m_renderSurfaceInvH;
+            int const       i0   = clampCoord(static_cast<int>(std::floor(grid.x)) - reach, 0, m_renderSurfaceCellX - 1);
+            int const       j0   = clampCoord(static_cast<int>(std::floor(grid.y)) - reach, 0, m_renderSurfaceCellY - 1);
+            int const       k0   = clampCoord(static_cast<int>(std::floor(grid.z)) - reach, 0, m_renderSurfaceCellZ - 1);
+            int const       i1   = clampCoord(static_cast<int>(std::floor(grid.x)) + reach, 0, m_renderSurfaceCellX - 1);
+            int const       j1   = clampCoord(static_cast<int>(std::floor(grid.y)) + reach, 0, m_renderSurfaceCellY - 1);
+            int const       k1   = clampCoord(static_cast<int>(std::floor(grid.z)) + reach, 0, m_renderSurfaceCellZ - 1);
 
-                    float value = 0.0f;
-                    for (int di = -reach; di <= reach; ++di) {
-                        int const ni = clampSlot(slot.x + di, m_iCellX - 1);
-                        for (int dj = -reach; dj <= reach; ++dj) {
-                            int const nj = clampSlot(slot.y + dj, m_iCellY - 1);
-                            for (int dk = -reach; dk <= reach; ++dk) {
-                                int const nk         = clampSlot(slot.z + dk, m_iCellZ - 1);
-                                int const neighborId = index2GridOffset(glm::ivec3(ni, nj, nk));
-                                for (int ptr = m_hashtableindex[neighborId];
-                                     ptr < m_hashtableindex[neighborId + 1];
-                                     ++ptr) {
-                                    int const particle = m_hashtable[ptr];
-                                    value += kernel(glm::length(p - m_particlePos[particle]));
-                                }
-                            }
-                        }
-                    }
+            for (int i = i0; i <= i1; ++i) {
+                for (int j = j0; j <= j1; ++j) {
+                    for (int k = k0; k <= k1; ++k) {
+                        glm::vec3 const p = renderPosition(i, j, k);
+                        float const     w = kernel(glm::length(p - particlePos));
+                        if (w <= 0.0f) continue;
 
-                    int const id             = renderIndex(i, j, k);
-                    m_renderSurfaceColor[id] = value;
-                    if (value > 1e-6f) {
-                        restFieldAccum += value;
-                        ++restFieldCount;
+                        int const id = renderIndex(i, j, k);
+                        m_renderSurfaceColor[id] += w;
+                        activePoint[id] = 1;
                     }
                 }
             }
         }
 
+        for (int id = 0; id < renderCellCount; ++id) {
+            float const value = m_renderSurfaceColor[id];
+            if (value > 1e-6f) {
+                restFieldAccum += value;
+                ++restFieldCount;
+            }
+        }
         // 用均值进行归一化
         float const restField = (restFieldCount > 0) ? std::max(restFieldAccum / float(restFieldCount), 1e-6f) : 1.0f;
         for (float & value : m_renderSurfaceColor)
             value = glm::clamp(value / restField, 0.0f, 1.5f);
 
-        // 模糊处理，平滑表面
-        int const          blurIters = std::max(0, m_renderSurfaceBlurIters);
+        // 先将参与建模的格点扩展到邻域内，避免模糊时遗漏边界点导致表面破洞
+        int const                  blurIters  = std::max(0, m_renderSurfaceBlurIters);
+        std::vector<unsigned char> activeWork = activePoint;
+        for (int expand = 0; expand < blurIters + 1; ++expand) {
+            std::vector<unsigned char> expanded = activeWork;
+            for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                    for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                        int const id = renderIndex(i, j, k);
+                        if (! activeWork[id]) continue;
+                        for (int di = -1; di <= 1; ++di) {
+                            int const ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                            for (int dj = -1; dj <= 1; ++dj) {
+                                int const nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                for (int dk = -1; dk <= 1; ++dk) {
+                                    int const nk                      = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                    expanded[renderIndex(ni, nj, nk)] = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            activeWork.swap(expanded);
+        }
+
+        // 模糊处理
         std::vector<float> scratch(renderCellCount, 0.0f);
         for (int iter = 0; iter < blurIters; ++iter) {
             for (int i = 0; i < m_renderSurfaceCellX; ++i) {
                 for (int j = 0; j < m_renderSurfaceCellY; ++j) {
                     for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                        int const id = renderIndex(i, j, k);
+                        if (! activeWork[id]) {
+                            scratch[id] = 0.0f;
+                            continue;
+                        }
                         float accum = 0.0f;
                         float wsum  = 0.0f;
                         for (int di = -1; di <= 1; ++di) {
@@ -1307,7 +1351,7 @@ namespace VCX::MainScene {
                                 }
                             }
                         }
-                        scratch[renderIndex(i, j, k)] = accum / std::max(wsum, 1e-6f);
+                        scratch[id] = accum / std::max(wsum, 1e-6f);
                     }
                 }
             }
@@ -1423,15 +1467,17 @@ namespace VCX::MainScene {
                     std::array<glm::vec3, 8> cubePos;
                     std::array<float, 8>     cubePhi;
                     int                      insideMask = 0;
+                    bool                     activeCube = false;
                     for (int c = 0; c < 8; ++c) {
                         int const x = i + cornerOffset[c][0];
                         int const y = j + cornerOffset[c][1];
                         int const z = k + cornerOffset[c][2];
                         cubePos[c]  = renderPosition(x, y, z);
                         cubePhi[c]  = m_renderSurfacePhi[renderIndex(x, y, z)];
+                        activeCube  = activeCube || activeWork[renderIndex(x, y, z)] != 0;
                         if (cubePhi[c] < 0.0f) insideMask |= (1 << c);
                     }
-                    if (insideMask == 0 || insideMask == 255) continue;
+                    if (! activeCube || insideMask == 0 || insideMask == 255) continue;
 
                     for (auto const & tet : tetrahedra) {
                         std::array<glm::vec3, 4> tetPos {

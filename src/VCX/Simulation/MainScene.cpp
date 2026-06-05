@@ -263,12 +263,20 @@ namespace VCX::MainScene {
         if (ImGui::SliderInt("Inv Time Step", &invDeltaTime, 20, 240))
             _world.SetInvDeltaTime(invDeltaTime);
 
-        auto const & fluid           = _world.GetFluid();
+        auto & fluid                 = _world.GetFluid();
         bool   enableSurfaceModeling = _world.EnableSurfaceModeling();
         if (ImGui::Checkbox("Enable Surface Modeling", &enableSurfaceModeling))
             _world.SetSurfaceModelingEnabled(enableSurfaceModeling);
         char const * fluidRenderModes[] = { "Particles Only", "Surface Only", "Particles + Surface" };
         ImGui::Combo("Fluid Render Mode", &_fluidRenderMode, fluidRenderModes, 3);
+        if (ImGui::SliderFloat("Surface Render Scale", &fluid.m_renderSurfaceResolutionScale, 1.0f, 2.0f, "%.2f"))
+            fluid.m_renderSurfaceFrameCounter = 0;
+        if (ImGui::SliderInt("Surface Update Interval", &fluid.m_renderSurfaceUpdateInterval, 1, 6))
+            fluid.m_renderSurfaceFrameCounter = 0;
+        ImGui::SliderInt("Surface Blur Iters", &fluid.m_renderSurfaceBlurIters, 0, 3);
+        float kernelRadiusScale = fluid.m_h > 0.0f ? fluid.m_renderSurfaceKernelRadius / fluid.m_h : 1.5f;
+        if (ImGui::SliderFloat("Surface Kernel Radius", &kernelRadiusScale, 1.0f, 3.0f, "%.2fh"))
+            fluid.m_renderSurfaceKernelRadius = kernelRadiusScale * fluid.m_h;
 
         bool enableGravity = _world.EnableGravity();
         if (ImGui::Checkbox("Enable Gravity", &enableGravity))

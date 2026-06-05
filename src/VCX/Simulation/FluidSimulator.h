@@ -83,7 +83,7 @@ namespace VCX::MainScene {
         float m_surfaceBandWidth    = 0.0f;  // 表面窄带宽度，表面张力只施加在|phi|<bandWidth的范围内.默认值2*m_h
         float m_surfaceCurvatureMax = 0.0f;  // 最大曲率 (用于限制过大曲率引起的数值不稳定).默认值1/m_h
 
-        int   m_renderSurfaceResolutionScale = 2;
+        float m_renderSurfaceResolutionScale = 1.5f;
         int   m_renderSurfaceCellX           = 0;
         int   m_renderSurfaceCellY           = 0;
         int   m_renderSurfaceCellZ           = 0;
@@ -92,6 +92,8 @@ namespace VCX::MainScene {
         float m_renderSurfaceIsoValue        = 0.45f;
         float m_renderSurfaceKernelRadius    = 0.0f;
         int   m_renderSurfaceBlurIters       = 1;
+        int   m_renderSurfaceUpdateInterval  = 2;
+        int   m_renderSurfaceFrameCounter    = 0;
 
         std::vector<float> m_renderSurfaceColor;
         std::vector<float> m_renderSurfacePhi;
