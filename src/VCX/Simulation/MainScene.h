@@ -57,6 +57,9 @@ namespace VCX::MainScene {
         bool                                _stopped { false };
         Engine::Model                       _sphere;
         std::optional<Engine::GL::UniqueIndexedRenderItem> _particleItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _fluidSurfaceItem;
+        std::vector<glm::vec3> _fluidSurfaceOffsets;
+        std::vector<glm::vec3> _fluidSurfaceColors;
 
         // Rigid bodies are rendered in the same style as Lab1: solid colored mesh + white/yellow wireframe.
         std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoxItem;
@@ -72,6 +75,7 @@ namespace VCX::MainScene {
         bool  _drawRigidSolid     { true };
         bool  _drawRigidWireframe { true };
         bool  _showRigidContacts  { true };
+        int   _fluidRenderMode    { 2 }; // 0=particles, 1=surface, 2=both
         float _rigidLineWidth     { 1.5f };
         float _rigidPointSize     { 7.0f };
 
@@ -91,6 +95,7 @@ namespace VCX::MainScene {
         void                  ResetSystem();
         void                  ResetSystem(int res);
         void                  RebuildParticleRenderItem();
+        void                  RebuildFluidSurfaceRenderItem();
         void                  RebuildRigidBodyRenderItem();
         void                  DrawRigidBodyControls();
         void                  ApplyRigidBodyLab1Controls();

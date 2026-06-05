@@ -1,6 +1,7 @@
 #include "Simulation/FluidSimulator.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -374,7 +375,7 @@ namespace VCX::MainScene {
                         if (m_type[id] != FLUID_CELL) continue;
                         // 这里将刚体考虑在内，与固体相邻的面使用刚体边界速度; 没有刚体边界时等价于静止墙速度0.
                         glm::ivec3 const cell(i, j, k);
-                        auto const fluidWeight = [&](glm::ivec3 const & neighbor) -> float {
+                        auto const       fluidWeight = [&](glm::ivec3 const & neighbor) -> float {
                             if (! IsInsideGrid(neighbor)) return 0.0f;
                             return m_s[index2GridOffset(neighbor)];
                         };
@@ -540,10 +541,7 @@ namespace VCX::MainScene {
         if (m_surfaceColor.empty()) return;
 
         auto sampleColor = [&](int i, int j, int k) {
-            return m_surfaceColor[index2GridOffset(glm::ivec3(
-                clampCoord(i, 0, m_iCellX - 1),
-                clampCoord(j, 0, m_iCellY - 1),
-                clampCoord(k, 0, m_iCellZ - 1)))];
+            return m_surfaceColor[index2GridOffset(glm::ivec3(clampCoord(i, 0, m_iCellX - 1), clampCoord(j, 0, m_iCellY - 1), clampCoord(k, 0, m_iCellZ - 1)))];
         };
 
         for (int i = 0; i < m_iCellX; ++i) {
@@ -563,10 +561,7 @@ namespace VCX::MainScene {
         }
 
         auto samplePhi = [&](int i, int j, int k) {
-            return m_surfacePhi[index2GridOffset(glm::ivec3(
-                clampCoord(i, 0, m_iCellX - 1),
-                clampCoord(j, 0, m_iCellY - 1),
-                clampCoord(k, 0, m_iCellZ - 1)))];
+            return m_surfacePhi[index2GridOffset(glm::ivec3(clampCoord(i, 0, m_iCellX - 1), clampCoord(j, 0, m_iCellY - 1), clampCoord(k, 0, m_iCellZ - 1)))];
         };
 
         // normal = gradPhi/|gradPhi|，gradPhi通过phi的中心差分计算得到
@@ -586,10 +581,7 @@ namespace VCX::MainScene {
         }
 
         auto sampleNormal = [&](int i, int j, int k) {
-            return m_surfaceNormal[index2GridOffset(glm::ivec3(
-                clampCoord(i, 0, m_iCellX - 1),
-                clampCoord(j, 0, m_iCellY - 1),
-                clampCoord(k, 0, m_iCellZ - 1)))];
+            return m_surfaceNormal[index2GridOffset(glm::ivec3(clampCoord(i, 0, m_iCellX - 1), clampCoord(j, 0, m_iCellY - 1), clampCoord(k, 0, m_iCellZ - 1)))];
         };
 
         // div(normal)计算曲率，div(gradPhi/|gradPhi|)的离散形式
@@ -746,6 +738,26 @@ namespace VCX::MainScene {
         m_surfaceRestField    = 0.0f;
     }
 
+    void FluidSimulator::EnsureRenderableSurfaceFields() {
+        if (m_iCellX <= 1 || m_iCellY <= 1 || m_iCellZ <= 1 || m_h <= 0.0f) return;
+        int const renderScale       = std::max(1, m_renderSurfaceResolutionScale);
+        m_renderSurfaceCellX        = (m_iCellX - 1) * renderScale + 1;
+        m_renderSurfaceCellY        = (m_iCellY - 1) * renderScale + 1;
+        m_renderSurfaceCellZ        = (m_iCellZ - 1) * renderScale + 1;
+        m_renderSurfaceH            = m_h / float(renderScale);
+        m_renderSurfaceInvH         = 1.0f / m_renderSurfaceH;
+        m_renderSurfaceKernelRadius = 2.5f * m_h;
+
+        int const renderCellCount = m_renderSurfaceCellX * m_renderSurfaceCellY * m_renderSurfaceCellZ;
+        m_renderSurfaceColor.clear();
+        m_renderSurfaceColor.resize(renderCellCount, 0.0f);
+        m_renderSurfacePhi.clear();
+        m_renderSurfacePhi.resize(renderCellCount, 0.0f);
+        m_renderSurfaceMesh.positions.clear();
+        m_renderSurfaceMesh.normals.clear();
+        m_renderSurfaceMesh.indices.clear();
+    }
+
     void FluidSimulator::SetSurfaceModelingEnabled(bool enabled) {
         if (enableSurfaceModeling == enabled) return;
 
@@ -843,7 +855,7 @@ namespace VCX::MainScene {
                     }
                 }
             }
-            
+
             float t            = std::abs(p) / maxPressure;
             m_particleColor[i] = ramp(t);
         }
@@ -851,7 +863,7 @@ namespace VCX::MainScene {
 
     void FluidSimulator::setupScene(int res) {
         glm::vec3 tank(1.0f);
-        glm::vec3 relWater = { 0.8f, 0.5f, 0.8f };
+        glm::vec3 relWater = { 0.6f, 0.5f, 0.6f };
 
         float _h      = tank.y / res;
         float point_r = 0.3f * _h;
@@ -1008,11 +1020,11 @@ namespace VCX::MainScene {
     void FluidSimulator::SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity) {
         if (! isVelocityFaceInRange(idx.x, idx.y, idx.z, dir)) return;
 
-        int const id = index2GridOffset(idx);
-        m_solidVel[id][dir] = velocity;
+        int const id            = index2GridOffset(idx);
+        m_solidVel[id][dir]     = velocity;
         m_solidVelMask[id][dir] = 1;
-        m_vel[id][dir] = velocity;
-        m_pre_vel[id][dir] = velocity;
+        m_vel[id][dir]          = velocity;
+        m_pre_vel[id][dir]      = velocity;
     }
 
     bool FluidSimulator::HasSolidBoundaryVelocity(int i, int j, int k, int dir) const {
@@ -1164,8 +1176,8 @@ namespace VCX::MainScene {
     }
 
     void FluidSimulator::SimulateTimestep(float dt, FluidStepConfig const & cfg) {
-        float     flipRatio = m_fRatio;
-        
+        float flipRatio = m_fRatio;
+
         float sdt = dt / cfg.numSubSteps;
 
         for (int step = 0; step < cfg.numSubSteps; step++) {
@@ -1186,6 +1198,253 @@ namespace VCX::MainScene {
             transferVelocities(false, flipRatio);
         }
         updateParticleColors();
+        updateRenderableSurface();
+    }
+
+    void FluidSimulator::updateRenderableSurface() {
+        m_renderSurfaceMesh.positions.clear();
+        m_renderSurfaceMesh.normals.clear();
+        m_renderSurfaceMesh.indices.clear();
+
+        EnsureRenderableSurfaceFields();
+        if (m_iNumSpheres <= 0 || m_renderSurfaceCellX <= 1 || m_renderSurfaceCellY <= 1 || m_renderSurfaceCellZ <= 1)
+            return;
+
+        buildHash();
+
+        int const renderCellCount = m_renderSurfaceCellX * m_renderSurfaceCellY * m_renderSurfaceCellZ;
+        if (static_cast<int>(m_renderSurfaceColor.size()) != renderCellCount)
+            m_renderSurfaceColor.assign(renderCellCount, 0.0f);
+        if (static_cast<int>(m_renderSurfacePhi.size()) != renderCellCount)
+            m_renderSurfacePhi.assign(renderCellCount, 0.0f);
+
+        auto renderIndex = [&](int i, int j, int k) {
+            return i * (m_renderSurfaceCellY * m_renderSurfaceCellZ) + j * m_renderSurfaceCellZ + k;
+        };
+
+        auto renderPosition = [&](int i, int j, int k) {
+            return glm::vec3(i, j, k) * m_renderSurfaceH - glm::vec3(0.5f);
+        };
+
+        std::fill(m_renderSurfaceColor.begin(), m_renderSurfaceColor.end(), 0.0f);
+
+        float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 2.5f * m_h;
+        float const invR   = 1.0f / radius;
+        int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_fInvSpacing)));
+
+        // 核函数
+        auto kernel = [&](float r) {
+            float const q = r * invR;
+            if (q >= 1.0f) return 0.0f;
+            float const s = 1.0f - q * q;
+            return s * s * s;
+        };
+
+        float restFieldAccum = 0.0f;
+        int   restFieldCount = 0;
+
+        // 对每个网格计算Color Field值: 遍历附近粒子并累加核函数权重
+        for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+            for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                    glm::vec3 const  p    = renderPosition(i, j, k);
+                    glm::ivec3 const slot = worldToCell(p);
+
+                    float value = 0.0f;
+                    for (int di = -reach; di <= reach; ++di) {
+                        int const ni = clampSlot(slot.x + di, m_iCellX - 1);
+                        for (int dj = -reach; dj <= reach; ++dj) {
+                            int const nj = clampSlot(slot.y + dj, m_iCellY - 1);
+                            for (int dk = -reach; dk <= reach; ++dk) {
+                                int const nk         = clampSlot(slot.z + dk, m_iCellZ - 1);
+                                int const neighborId = index2GridOffset(glm::ivec3(ni, nj, nk));
+                                for (int ptr = m_hashtableindex[neighborId];
+                                     ptr < m_hashtableindex[neighborId + 1];
+                                     ++ptr) {
+                                    int const particle = m_hashtable[ptr];
+                                    value += kernel(glm::length(p - m_particlePos[particle]));
+                                }
+                            }
+                        }
+                    }
+
+                    int const id             = renderIndex(i, j, k);
+                    m_renderSurfaceColor[id] = value;
+                    if (value > 1e-6f) {
+                        restFieldAccum += value;
+                        ++restFieldCount;
+                    }
+                }
+            }
+        }
+
+        // 用均值进行归一化
+        float const restField = (restFieldCount > 0) ? std::max(restFieldAccum / float(restFieldCount), 1e-6f) : 1.0f;
+        for (float & value : m_renderSurfaceColor)
+            value = glm::clamp(value / restField, 0.0f, 1.5f);
+
+        // 模糊处理，平滑表面
+        int const          blurIters = std::max(0, m_renderSurfaceBlurIters);
+        std::vector<float> scratch(renderCellCount, 0.0f);
+        for (int iter = 0; iter < blurIters; ++iter) {
+            for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                    for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                        float accum = 0.0f;
+                        float wsum  = 0.0f;
+                        for (int di = -1; di <= 1; ++di) {
+                            int const   ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                            float const wi = (di == 0) ? 2.0f : 1.0f;
+                            for (int dj = -1; dj <= 1; ++dj) {
+                                int const   nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                float const wj = (dj == 0) ? 2.0f : 1.0f;
+                                for (int dk = -1; dk <= 1; ++dk) {
+                                    int const   nk = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                    float const wk = (dk == 0) ? 2.0f : 1.0f;
+                                    float const w  = wi * wj * wk;
+                                    accum += w * m_renderSurfaceColor[renderIndex(ni, nj, nk)];
+                                    wsum += w;
+                                }
+                            }
+                        }
+                        scratch[renderIndex(i, j, k)] = accum / std::max(wsum, 1e-6f);
+                    }
+                }
+            }
+            m_renderSurfaceColor.swap(scratch);
+        }
+
+        for (int id = 0; id < renderCellCount; ++id)
+            m_renderSurfacePhi[id] = m_renderSurfaceIsoValue - m_renderSurfaceColor[id];
+
+        auto samplePhi = [&](int i, int j, int k) {
+            return m_renderSurfacePhi[renderIndex(
+                clampCoord(i, 0, m_renderSurfaceCellX - 1),
+                clampCoord(j, 0, m_renderSurfaceCellY - 1),
+                clampCoord(k, 0, m_renderSurfaceCellZ - 1))];
+        };
+
+        auto normalAt = [&](glm::vec3 const & p) {
+            glm::vec3 g = (p + glm::vec3(0.5f)) * m_renderSurfaceInvH;
+            int const i = clampCoord(static_cast<int>(std::round(g.x)), 0, m_renderSurfaceCellX - 1);
+            int const j = clampCoord(static_cast<int>(std::round(g.y)), 0, m_renderSurfaceCellY - 1);
+            int const k = clampCoord(static_cast<int>(std::round(g.z)), 0, m_renderSurfaceCellZ - 1);
+
+            glm::vec3 grad(
+                (samplePhi(i + 1, j, k) - samplePhi(i - 1, j, k)) * 0.5f * m_renderSurfaceInvH,
+                (samplePhi(i, j + 1, k) - samplePhi(i, j - 1, k)) * 0.5f * m_renderSurfaceInvH,
+                (samplePhi(i, j, k + 1) - samplePhi(i, j, k - 1)) * 0.5f * m_renderSurfaceInvH);
+            float const len = glm::length(grad);
+            return (len > 1e-6f) ? grad / len : glm::vec3(0.0f, 1.0f, 0.0f);
+        };
+
+        auto emitTriangle = [&](glm::vec3 const & a, glm::vec3 const & b, glm::vec3 const & c) {
+            std::uint32_t const base = static_cast<std::uint32_t>(m_renderSurfaceMesh.positions.size());
+            m_renderSurfaceMesh.positions.push_back(a);
+            m_renderSurfaceMesh.positions.push_back(b);
+            m_renderSurfaceMesh.positions.push_back(c);
+            m_renderSurfaceMesh.normals.push_back(normalAt(a));
+            m_renderSurfaceMesh.normals.push_back(normalAt(b));
+            m_renderSurfaceMesh.normals.push_back(normalAt(c));
+            m_renderSurfaceMesh.indices.push_back(base);
+            m_renderSurfaceMesh.indices.push_back(base + 1);
+            m_renderSurfaceMesh.indices.push_back(base + 2);
+        };
+
+        auto interpolate = [&](glm::vec3 const & a, glm::vec3 const & b, float phiA, float phiB) {
+            float const denom = phiA - phiB;
+            float const t     = (std::abs(denom) > 1e-8f) ? glm::clamp(phiA / denom, 0.0f, 1.0f) : 0.5f;
+            return glm::mix(a, b, t);
+        };
+
+        // 用 Marching Tetrahedra 对界面处四面体进行分割
+        auto polygonizeTetra = [&](std::array<glm::vec3, 4> const & p, std::array<float, 4> const & phi) {
+            std::array<int, 4> inside {};
+            std::array<int, 4> outside {};
+            int                insideCount  = 0;
+            int                outsideCount = 0;
+            for (int i = 0; i < 4; ++i) {
+                if (phi[i] < 0.0f)
+                    inside[insideCount++] = i;
+                else
+                    outside[outsideCount++] = i;
+            }
+            if (insideCount == 0 || insideCount == 4) return; // 整个四面体都在流体内部或者都在流体外部
+
+            if (insideCount == 1 || insideCount == 3) {
+                bool const      flip = (insideCount == 3);
+                int const       a    = flip ? outside[0] : inside[0];
+                int const       b    = flip ? inside[0] : outside[0];
+                int const       c    = flip ? inside[1] : outside[1];
+                int const       d    = flip ? inside[2] : outside[2];
+                glm::vec3 const p0   = interpolate(p[a], p[b], phi[a], phi[b]);
+                glm::vec3 const p1   = interpolate(p[a], p[c], phi[a], phi[c]);
+                glm::vec3 const p2   = interpolate(p[a], p[d], phi[a], phi[d]);
+                if (flip) emitTriangle(p0, p2, p1);
+                else emitTriangle(p0, p1, p2);
+                return;
+            }
+
+            int const       a  = inside[0];
+            int const       b  = inside[1];
+            int const       c  = outside[0];
+            int const       d  = outside[1];
+            glm::vec3 const p0 = interpolate(p[a], p[c], phi[a], phi[c]);
+            glm::vec3 const p1 = interpolate(p[a], p[d], phi[a], phi[d]);
+            glm::vec3 const p2 = interpolate(p[b], p[c], phi[b], phi[c]);
+            glm::vec3 const p3 = interpolate(p[b], p[d], phi[b], phi[d]);
+            emitTriangle(p0, p1, p2);
+            emitTriangle(p2, p1, p3);
+        };
+
+        static constexpr int cornerOffset[8][3] {
+            { 0, 0, 0 },
+            { 1, 0, 0 },
+            { 1, 1, 0 },
+            { 0, 1, 0 },
+            { 0, 0, 1 },
+            { 1, 0, 1 },
+            { 1, 1, 1 },
+            { 0, 1, 1 }
+        };
+        static constexpr int tetrahedra[6][4] {
+            { 0, 5, 1, 6 },
+            { 0, 1, 2, 6 },
+            { 0, 2, 3, 6 },
+            { 0, 3, 7, 6 },
+            { 0, 7, 4, 6 },
+            { 0, 4, 5, 6 }
+        };
+
+        // 每个立方体网格分解成6个四面体，分别进行Marching Tetrahedra处理，生成三角形网格
+        for (int i = 0; i < m_renderSurfaceCellX - 1; ++i) {
+            for (int j = 0; j < m_renderSurfaceCellY - 1; ++j) {
+                for (int k = 0; k < m_renderSurfaceCellZ - 1; ++k) {
+                    std::array<glm::vec3, 8> cubePos;
+                    std::array<float, 8>     cubePhi;
+                    int                      insideMask = 0;
+                    for (int c = 0; c < 8; ++c) {
+                        int const x = i + cornerOffset[c][0];
+                        int const y = j + cornerOffset[c][1];
+                        int const z = k + cornerOffset[c][2];
+                        cubePos[c]  = renderPosition(x, y, z);
+                        cubePhi[c]  = m_renderSurfacePhi[renderIndex(x, y, z)];
+                        if (cubePhi[c] < 0.0f) insideMask |= (1 << c);
+                    }
+                    if (insideMask == 0 || insideMask == 255) continue;
+
+                    for (auto const & tet : tetrahedra) {
+                        std::array<glm::vec3, 4> tetPos {
+                            cubePos[tet[0]], cubePos[tet[1]], cubePos[tet[2]], cubePos[tet[3]]
+                        };
+                        std::array<float, 4> tetPhi {
+                            cubePhi[tet[0]], cubePhi[tet[1]], cubePhi[tet[2]], cubePhi[tet[3]]
+                        };
+                        polygonizeTetra(tetPos, tetPhi);
+                    }
+                }
+            }
+        }
     }
 
 } // namespace VCX::MainScene

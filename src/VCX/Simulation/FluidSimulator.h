@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <cstdint>
 #include <vector>
 
 namespace VCX::MainScene {
@@ -8,6 +9,12 @@ namespace VCX::MainScene {
     const int EMPTY_CELL = 0;
     const int FLUID_CELL = 1;
     const int SOLID_CELL = 2;
+
+    struct FluidSurfaceMesh {
+        std::vector<glm::vec3>      positions;
+        std::vector<glm::vec3>      normals;
+        std::vector<std::uint32_t>  indices;
+    };
 
     // 纯流体模式的可配置时间步参数
     struct FluidStepConfig {
@@ -76,6 +83,20 @@ namespace VCX::MainScene {
         float m_surfaceBandWidth    = 0.0f;  // 表面窄带宽度，表面张力只施加在|phi|<bandWidth的范围内.默认值2*m_h
         float m_surfaceCurvatureMax = 0.0f;  // 最大曲率 (用于限制过大曲率引起的数值不稳定).默认值1/m_h
 
+        int   m_renderSurfaceResolutionScale = 2;
+        int   m_renderSurfaceCellX           = 0;
+        int   m_renderSurfaceCellY           = 0;
+        int   m_renderSurfaceCellZ           = 0;
+        float m_renderSurfaceH               = 0.0f;  // 等于 m_h/m_renderSurfaceResolutionScale
+        float m_renderSurfaceInvH            = 0.0f;
+        float m_renderSurfaceIsoValue        = 0.45f;
+        float m_renderSurfaceKernelRadius    = 0.0f;
+        int   m_renderSurfaceBlurIters       = 1;
+
+        std::vector<float> m_renderSurfaceColor;
+        std::vector<float> m_renderSurfacePhi;
+        FluidSurfaceMesh   m_renderSurfaceMesh;
+
         glm::vec3 gravity { 0, -9.81f, 0 };
         bool      enableGravity = true;
 
@@ -104,9 +125,13 @@ namespace VCX::MainScene {
         void updateSurfaceField();
         void computeSurfaceGeometry();
         void applySurfaceTension(float dt);
+
+        void updateRenderableSurface();
+        FluidSurfaceMesh const & GetRenderableSurface() const { return m_renderSurfaceMesh; }
         void SetSurfaceModelingEnabled(bool enabled);
         void EnsureSurfaceFields();
         void ClearSurfaceFields();
+        void EnsureRenderableSurfaceFields();
 
         // Step 7: 更新粒子颜色 — 根据压力大小着色 (蓝→青→红)
         void updateParticleColors();

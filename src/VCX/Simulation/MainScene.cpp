@@ -267,6 +267,8 @@ namespace VCX::MainScene {
         bool   enableSurfaceModeling = _world.EnableSurfaceModeling();
         if (ImGui::Checkbox("Enable Surface Modeling", &enableSurfaceModeling))
             _world.SetSurfaceModelingEnabled(enableSurfaceModeling);
+        char const * fluidRenderModes[] = { "Particles Only", "Surface Only", "Particles + Surface" };
+        ImGui::Combo("Fluid Render Mode", &_fluidRenderMode, fluidRenderModes, 3);
 
         bool enableGravity = _world.EnableGravity();
         if (ImGui::Checkbox("Enable Gravity", &enableGravity))
@@ -435,7 +437,22 @@ namespace VCX::MainScene {
         glLineWidth(1.0f);
 
         auto const & fluid = _world.GetFluid();
-        if (fluid.m_iNumSpheres > 0 && _particleItem) {
+        auto const & surface = fluid.GetRenderableSurface();
+        bool const drawFluidParticles = _fluidRenderMode == 0 || _fluidRenderMode == 2;
+        bool const drawFluidSurface   = _fluidRenderMode == 1 || _fluidRenderMode == 2;
+
+        if (drawFluidSurface && _fluidSurfaceItem && ! surface.indices.empty()) {
+            _fluidSurfaceOffsets.assign(surface.positions.size(), glm::vec3(0.0f));
+            _fluidSurfaceColors.assign(surface.positions.size(), glm::vec3(0.08f, 0.48f, 0.90f));
+            _fluidSurfaceItem->UpdateVertexBuffer("position", Engine::make_span_bytes<glm::vec3>(surface.positions));
+            _fluidSurfaceItem->UpdateVertexBuffer("normal", Engine::make_span_bytes<glm::vec3>(surface.normals));
+            _fluidSurfaceItem->UpdateVertexBuffer("offset", Engine::make_span_bytes<glm::vec3>(_fluidSurfaceOffsets));
+            _fluidSurfaceItem->UpdateVertexBuffer("color", Engine::make_span_bytes<glm::vec3>(_fluidSurfaceColors));
+            _fluidSurfaceItem->UpdateElementBuffer(surface.indices);
+            _fluidSurfaceItem->Draw({ _program.Use() });
+        }
+
+        if (drawFluidParticles && fluid.m_iNumSpheres > 0 && _particleItem) {
             _particleItem->UpdateVertexBuffer("offset", Engine::make_span_bytes<glm::vec3>(fluid.m_particlePos));
             _particleItem->UpdateVertexBuffer("color", Engine::make_span_bytes<glm::vec3>(fluid.m_particleColor));
             _particleItem->Draw(
@@ -579,6 +596,7 @@ namespace VCX::MainScene {
         _hoverHasHit         = false;
         _hoverRigidBodyId    = -1;
         RebuildParticleRenderItem();
+        RebuildFluidSurfaceRenderItem();
         RebuildRigidBodyRenderItem();
     }
 
@@ -590,6 +608,7 @@ namespace VCX::MainScene {
         _hoverHasHit         = false;
         _hoverRigidBodyId    = -1;
         RebuildParticleRenderItem();
+        RebuildFluidSurfaceRenderItem();
         RebuildRigidBodyRenderItem();
     }
 
@@ -608,6 +627,18 @@ namespace VCX::MainScene {
         _particleItem->SetAttributeDivisor(2, 1);
         _particleItem->SetAttributeDivisor(3, 1);
         _particleItem->UpdateElementBuffer(_sphere.Mesh.Indices);
+    }
+
+    void MainScene::RebuildFluidSurfaceRenderItem() {
+        _fluidSurfaceItem.emplace(
+            Engine::GL::VertexLayout()
+                .Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0)
+                .Add<glm::vec3>("normal", Engine::GL::DrawFrequency::Stream, 1)
+                .Add<glm::vec3>("offset", Engine::GL::DrawFrequency::Stream, 2)
+                .Add<glm::vec3>("color", Engine::GL::DrawFrequency::Stream, 3),
+            Engine::GL::PrimitiveType::Triangles);
+        _fluidSurfaceOffsets.clear();
+        _fluidSurfaceColors.clear();
     }
 
     void MainScene::RebuildRigidBodyRenderItem() {

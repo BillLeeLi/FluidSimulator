@@ -135,6 +135,7 @@ namespace VCX::MainScene {
         _externalTorque.setZero();
         _externalBody = -1;
         _fluid.updateParticleColors();
+        _fluid.updateRenderableSurface();
     }
 
     void SimulationWorld::StepFrame(float frameDt) {
