@@ -1,7 +1,9 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -10,17 +12,29 @@
 #include <Eigen/Geometry>
 #include <glm/glm.hpp>
 
+namespace fcl {
+    template <typename S> class CollisionGeometry;
+}
+
 namespace VCX::MainScene {
 
     enum class RigidBodyShape {
         Box,
         Sphere,
+        BoatHull,
     };
 
     enum class RigidBodyPreset {
         FluidCouplingMixed = 0,
         BoxCollision       = 1,
         MixedStack         = 2,
+        BoatInWater       = 3,
+    };
+
+    struct RigidBuoyancySample {
+        Eigen::Vector3f localPosition = Eigen::Vector3f::Zero();
+        float           volumeWeight  = 1.0f;
+        float           radius        = 0.04f;
     };
 
     struct RigidContact {
@@ -59,6 +73,14 @@ namespace VCX::MainScene {
         Eigen::Vector3f torque = Eigen::Vector3f::Zero();
 
         Eigen::Vector3f color = Eigen::Vector3f(0.75f, 0.75f, 0.8f);
+
+        // BoatHull 使用同一套 Kenney 小船三角网格参与渲染、FCL 碰撞、流体投影和压力采样。
+        std::vector<Eigen::Vector3f>     meshVertices;
+        std::vector<std::uint32_t>       meshTriIndices;
+        // 浮力采样点固定在船体局部坐标里，Step 时按当前姿态转到世界坐标施力。
+        std::vector<RigidBuoyancySample> buoyancySamples;
+        // 薄壳模型给流体网格用的有效厚度。FCL 碰撞仍然用原始三角面。
+        float solidShellThickness = 0.0f;
 
         float       mass        = 1.0f;
         float       invMass     = 1.0f;
@@ -143,9 +165,19 @@ namespace VCX::MainScene {
         void SetBodyShape(int id, RigidBodyShape shape);
 
     private:
+        using CollisionGeometryPtr = std::shared_ptr<fcl::CollisionGeometry<float>>;
+
         void collisionDetectPairFCL(int idA, int idB);
         void sortContactsForStability();
         void resolveVelocityContact(RigidContact & contact);
+
+        void InvalidateCollisionGeometryCache();
+        void EnsureCollisionGeometryCache();
+        CollisionGeometryPtr const & CollisionGeometryAt(int id);
+
+        // 只缓存几何，不缓存位姿。刚体每帧的 x/q 仍然在 CollisionObject 里更新。
+        std::vector<CollisionGeometryPtr> _collisionGeometryCache;
+        bool                              _collisionGeometryCacheDirty = true;
     };
 
     glm::vec3        ToGlm(Eigen::Vector3f const & v);

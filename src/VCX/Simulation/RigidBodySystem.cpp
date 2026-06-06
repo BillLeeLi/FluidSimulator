@@ -1,4 +1,5 @@
 #include "Simulation/RigidBodySystem.h"
+#include "Simulation/KenneyBoatSpeedAMesh.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,8 +7,10 @@
 #include <tuple>
 #include <vector>
 
+#include <fcl/geometry/bvh/BVH_model.h>
 #include <fcl/geometry/shape/box.h>
 #include <fcl/geometry/shape/sphere.h>
+#include <fcl/math/bv/OBBRSS.h>
 #include <fcl/narrowphase/collision.h>
 
 namespace VCX::MainScene {
@@ -21,15 +24,208 @@ namespace VCX::MainScene {
         }
 
         using CollisionGeometryPtr = std::shared_ptr<fcl::CollisionGeometry<float>>;
+        using BoatBVHModel = fcl::BVHModel<fcl::OBBRSS<float>>;
 
-        CollisionGeometryPtr MakeCollisionGeometry(RigidBody const & body) {
-            switch (body.shape) {
+        CollisionGeometryPtr MakePrimitiveCollisionGeometry(RigidBodyShape shape, Eigen::Vector3f const & dim) {
+            switch (shape) {
             case RigidBodyShape::Sphere:
-                return CollisionGeometryPtr(new fcl::Sphere<float>(0.5f * body.dim.x()));
+                return CollisionGeometryPtr(new fcl::Sphere<float>(0.5f * dim.x()));
             case RigidBodyShape::Box:
             default:
-                return CollisionGeometryPtr(new fcl::Box<float>(body.dim.x(), body.dim.y(), body.dim.z()));
+                return CollisionGeometryPtr(new fcl::Box<float>(dim.x(), dim.y(), dim.z()));
             }
+        }
+
+        CollisionGeometryPtr MakeBoatMeshCollisionGeometry(RigidBody const & body) {
+            if (body.meshVertices.empty() || body.meshTriIndices.size() < 3) {
+                return MakePrimitiveCollisionGeometry(RigidBodyShape::Box, body.dim);
+            }
+
+            std::vector<fcl::Vector3<float>> vertices;
+            vertices.reserve(body.meshVertices.size());
+            for (auto const & v : body.meshVertices) {
+                vertices.emplace_back(v.x(), v.y(), v.z());
+            }
+
+            std::vector<fcl::Triangle> triangles;
+            triangles.reserve(body.meshTriIndices.size() / 3);
+            for (std::size_t i = 0; i + 2 < body.meshTriIndices.size(); i += 3) {
+                std::uint32_t const ia = body.meshTriIndices[i + 0];
+                std::uint32_t const ib = body.meshTriIndices[i + 1];
+                std::uint32_t const ic = body.meshTriIndices[i + 2];
+                if (ia >= vertices.size() || ib >= vertices.size() || ic >= vertices.size()) continue;
+                triangles.emplace_back(static_cast<int>(ia), static_cast<int>(ib), static_cast<int>(ic));
+            }
+
+            if (triangles.empty()) {
+                return MakePrimitiveCollisionGeometry(RigidBodyShape::Box, body.dim);
+            }
+
+            auto mesh = std::make_shared<BoatBVHModel>();
+            mesh->beginModel(static_cast<int>(triangles.size()), static_cast<int>(vertices.size()));
+            mesh->addSubModel(vertices, triangles);
+            mesh->endModel();
+            return mesh;
+        }
+
+        CollisionGeometryPtr MakeCollisionGeometry(RigidBody const & body) {
+            if (body.shape == RigidBodyShape::BoatHull) {
+                return MakeBoatMeshCollisionGeometry(body);
+            }
+            return MakePrimitiveCollisionGeometry(body.shape, body.dim);
+        }
+
+        Eigen::Vector3f MeshLocalCenter(RigidBody const & body) {
+            if (body.meshVertices.empty()) return Eigen::Vector3f::Zero();
+            Eigen::Vector3f mn = body.meshVertices.front();
+            Eigen::Vector3f mx = body.meshVertices.front();
+            for (auto const & v : body.meshVertices) {
+                mn = mn.cwiseMin(v);
+                mx = mx.cwiseMax(v);
+            }
+            return 0.5f * (mn + mx);
+        }
+
+        Eigen::Vector3f OrientedTriangleNormalLocal(
+            RigidBody const & body,
+            Eigen::Vector3f const & a,
+            Eigen::Vector3f const & b,
+            Eigen::Vector3f const & c) {
+            Eigen::Vector3f n = (b - a).cross(c - a);
+            if (n.squaredNorm() <= kEps * kEps) return Eigen::Vector3f::UnitY();
+
+            Eigen::Vector3f const triCenter  = (a + b + c) / 3.0f;
+            Eigen::Vector3f const meshCenter = MeshLocalCenter(body);
+            if (n.dot(triCenter - meshCenter) < 0.0f) n = -n;
+            return SafeNormalized(n, Eigen::Vector3f::UnitY());
+        }
+
+        bool RayTriangleHitLocalX(
+            Eigen::Vector3f const & p,
+            Eigen::Vector3f const & a,
+            Eigen::Vector3f const & b,
+            Eigen::Vector3f const & c,
+            float & t) {
+            Eigen::Vector3f const dir = Eigen::Vector3f::UnitX();
+            Eigen::Vector3f const e1 = b - a;
+            Eigen::Vector3f const e2 = c - a;
+            Eigen::Vector3f const h  = dir.cross(e2);
+            float const det = e1.dot(h);
+            if (std::abs(det) < 1e-7f) return false;
+
+            float const invDet = 1.0f / det;
+            Eigen::Vector3f const s = p - a;
+            float const u = invDet * s.dot(h);
+            if (u < -1e-5f || u > 1.0f + 1e-5f) return false;
+
+            Eigen::Vector3f const q = s.cross(e1);
+            float const v = invDet * dir.dot(q);
+            if (v < -1e-5f || u + v > 1.0f + 1e-5f) return false;
+
+            t = invDet * e2.dot(q);
+            return t > 1e-5f;
+        }
+
+        bool MeshContainsLocalPoint(RigidBody const & body, Eigen::Vector3f const & p) {
+            if (body.meshVertices.empty() || body.meshTriIndices.size() < 3) return false;
+
+            std::vector<float> hits;
+            hits.reserve(32);
+            for (std::size_t i = 0; i + 2 < body.meshTriIndices.size(); i += 3) {
+                std::uint32_t const ia = body.meshTriIndices[i + 0];
+                std::uint32_t const ib = body.meshTriIndices[i + 1];
+                std::uint32_t const ic = body.meshTriIndices[i + 2];
+                if (ia >= body.meshVertices.size() || ib >= body.meshVertices.size() || ic >= body.meshVertices.size()) continue;
+
+                float t = 0.0f;
+                if (! RayTriangleHitLocalX(p, body.meshVertices[ia], body.meshVertices[ib], body.meshVertices[ic], t)) continue;
+
+                bool duplicate = false;
+                for (float oldT : hits) {
+                    if (std::abs(oldT - t) < 1e-4f) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (! duplicate) hits.push_back(t);
+            }
+            return (hits.size() % 2) == 1;
+        }
+
+        Eigen::Vector3f ClosestPointOnTriangle(
+            Eigen::Vector3f const & p,
+            Eigen::Vector3f const & a,
+            Eigen::Vector3f const & b,
+            Eigen::Vector3f const & c) {
+            Eigen::Vector3f const ab = b - a;
+            Eigen::Vector3f const ac = c - a;
+            Eigen::Vector3f const ap = p - a;
+            float const d1 = ab.dot(ap);
+            float const d2 = ac.dot(ap);
+            if (d1 <= 0.0f && d2 <= 0.0f) return a;
+
+            Eigen::Vector3f const bp = p - b;
+            float const d3 = ab.dot(bp);
+            float const d4 = ac.dot(bp);
+            if (d3 >= 0.0f && d4 <= d3) return b;
+
+            float const vc = d1 * d4 - d3 * d2;
+            if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+                float const v = d1 / (d1 - d3);
+                return a + v * ab;
+            }
+
+            Eigen::Vector3f const cp = p - c;
+            float const d5 = ab.dot(cp);
+            float const d6 = ac.dot(cp);
+            if (d6 >= 0.0f && d5 <= d6) return c;
+
+            float const vb = d5 * d2 - d1 * d6;
+            if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+                float const w = d2 / (d2 - d6);
+                return a + w * ac;
+            }
+
+            float const va = d3 * d6 - d5 * d4;
+            if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+                float const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+                return b + w * (c - b);
+            }
+
+            float const denom = 1.0f / (va + vb + vc);
+            float const v = vb * denom;
+            float const w = vc * denom;
+            return a + ab * v + ac * w;
+        }
+
+        bool ClosestBoatMeshPointLocal(
+            RigidBody const & body,
+            Eigen::Vector3f const & localPoint,
+            Eigen::Vector3f & closestPoint,
+            Eigen::Vector3f & normal) {
+            if (body.meshVertices.empty() || body.meshTriIndices.size() < 3) return false;
+
+            bool found = false;
+            float bestDist2 = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i + 2 < body.meshTriIndices.size(); i += 3) {
+                std::uint32_t const ia = body.meshTriIndices[i + 0];
+                std::uint32_t const ib = body.meshTriIndices[i + 1];
+                std::uint32_t const ic = body.meshTriIndices[i + 2];
+                if (ia >= body.meshVertices.size() || ib >= body.meshVertices.size() || ic >= body.meshVertices.size()) continue;
+
+                Eigen::Vector3f const & a = body.meshVertices[ia];
+                Eigen::Vector3f const & b = body.meshVertices[ib];
+                Eigen::Vector3f const & c = body.meshVertices[ic];
+                Eigen::Vector3f const q = ClosestPointOnTriangle(localPoint, a, b, c);
+                float const dist2 = (q - localPoint).squaredNorm();
+                if (! found || dist2 < bestDist2) {
+                    found = true;
+                    bestDist2 = dist2;
+                    closestPoint = q;
+                    normal = OrientedTriangleNormalLocal(body, a, b, c);
+                }
+            }
+            return found;
         }
 
         Eigen::Quaternionf SmallRotationFromAngularVelocity(Eigen::Vector3f const & w, float dt, Eigen::Quaternionf const & q) {
@@ -54,7 +250,8 @@ namespace VCX::MainScene {
         if (shape == RigidBodyShape::Sphere) {
             return 0.5f * dim.x();
         }
-        return 0.5f * dim.norm();
+        auto const [mn, mx] = GetWorldAABB();
+        return 0.5f * (mx - mn).norm();
     }
 
     void RigidBody::UpdateMassProperties() {
@@ -70,6 +267,7 @@ namespace VCX::MainScene {
         invMass = 1.0f / mass;
         inertiaBody.setZero();
 
+
         switch (shape) {
         case RigidBodyShape::Sphere: {
             float const r = 0.5f * dim.x();
@@ -77,6 +275,7 @@ namespace VCX::MainScene {
             inertiaBody.diagonal().setConstant(I);
             break;
         }
+        case RigidBodyShape::BoatHull:
         case RigidBodyShape::Box:
         default: {
             float const x2    = dim.x() * dim.x();
@@ -134,6 +333,18 @@ namespace VCX::MainScene {
     }
 
     std::pair<Eigen::Vector3f, Eigen::Vector3f> RigidBody::GetWorldAABB() const {
+        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty()) {
+            Eigen::Vector3f mn = LocalToWorld(meshVertices[0]);
+            Eigen::Vector3f mx = mn;
+            for (auto const & v : meshVertices) {
+                Eigen::Vector3f const p = LocalToWorld(v);
+                mn = mn.cwiseMin(p);
+                mx = mx.cwiseMax(p);
+            }
+            return { mn, mx };
+        }
+
+
         auto const corners = GetWorldCorners();
         Eigen::Vector3f mn = corners[0];
         Eigen::Vector3f mx = corners[0];
@@ -152,7 +363,24 @@ namespace VCX::MainScene {
         return x + GetRotationMatrix() * p;
     }
 
+
     bool RigidBody::ContainsPoint(Eigen::Vector3f const & worldPoint) const {
+        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty() && meshTriIndices.size() >= 3) {
+            Eigen::Vector3f const localPoint = WorldToLocal(worldPoint);
+            if (MeshContainsLocalPoint(*this, localPoint)) return true;
+
+            // Kenney 船体是薄壳。流体网格只看 cell center，完全零厚度的话很容易漏掉表面。
+            // 这里给 BoatHull 一个显式的有效厚度；FCL 碰撞不受这个值影响。
+            Eigen::Vector3f closestLocal = Eigen::Vector3f::Zero();
+            Eigen::Vector3f normalLocal  = Eigen::Vector3f::UnitY();
+            if (ClosestBoatMeshPointLocal(*this, localPoint, closestLocal, normalLocal)) {
+                float const shellThickness = std::max(0.0f, solidShellThickness);
+                return shellThickness > 0.0f && (closestLocal - localPoint).squaredNorm() <= shellThickness * shellThickness;
+            }
+            return false;
+        }
+
+
         Eigen::Vector3f const local = WorldToLocal(worldPoint);
         if (shape == RigidBodyShape::Sphere) {
             float const r = 0.5f * dim.x();
@@ -166,6 +394,15 @@ namespace VCX::MainScene {
 
     Eigen::Vector3f RigidBody::ClosestSurfacePoint(Eigen::Vector3f const & worldPoint) const {
         // 鼠标选点和粒子推出刚体时都会用到这个近似表面点。
+        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty() && meshTriIndices.size() >= 3) {
+            Eigen::Vector3f closestLocal = Eigen::Vector3f::Zero();
+            Eigen::Vector3f normalLocal  = Eigen::Vector3f::UnitY();
+            if (ClosestBoatMeshPointLocal(*this, WorldToLocal(worldPoint), closestLocal, normalLocal)) {
+                return LocalToWorld(closestLocal);
+            }
+        }
+
+
         Eigen::Vector3f const local = WorldToLocal(worldPoint);
         if (shape == RigidBodyShape::Sphere) {
             float const r = 0.5f * dim.x();
@@ -185,6 +422,15 @@ namespace VCX::MainScene {
     }
 
     Eigen::Vector3f RigidBody::SurfaceNormalAt(Eigen::Vector3f const & worldPoint) const {
+        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty() && meshTriIndices.size() >= 3) {
+            Eigen::Vector3f closestLocal = Eigen::Vector3f::Zero();
+            Eigen::Vector3f normalLocal  = Eigen::Vector3f::UnitY();
+            if (ClosestBoatMeshPointLocal(*this, WorldToLocal(worldPoint), closestLocal, normalLocal)) {
+                return GetRotationMatrix() * normalLocal;
+            }
+        }
+
+
         Eigen::Vector3f const local = WorldToLocal(worldPoint);
         if (shape == RigidBodyShape::Sphere) {
             return GetRotationMatrix() * SafeNormalized(local, Eigen::Vector3f::UnitY());
@@ -203,16 +449,38 @@ namespace VCX::MainScene {
     void RigidBodySystem::Clear() {
         Bodies.clear();
         Contacts.clear();
+        InvalidateCollisionGeometryCache();
     }
 
     void RigidBodySystem::Reset() {
         Clear();
     }
 
+    void RigidBodySystem::InvalidateCollisionGeometryCache() {
+        _collisionGeometryCache.clear();
+        _collisionGeometryCacheDirty = true;
+    }
+
+    void RigidBodySystem::EnsureCollisionGeometryCache() {
+        if (! _collisionGeometryCacheDirty && _collisionGeometryCache.size() == Bodies.size()) return;
+
+        _collisionGeometryCache.assign(Bodies.size(), nullptr);
+        for (int i = 0; i < static_cast<int>(Bodies.size()); ++i) {
+            _collisionGeometryCache[i] = MakeCollisionGeometry(Bodies[i]);
+        }
+        _collisionGeometryCacheDirty = false;
+    }
+
+    RigidBodySystem::CollisionGeometryPtr const & RigidBodySystem::CollisionGeometryAt(int id) {
+        EnsureCollisionGeometryCache();
+        return _collisionGeometryCache[id];
+    }
+
     int RigidBodySystem::AddBody(RigidBody body) {
         body.q.normalize();
         body.UpdateMassProperties();
         Bodies.push_back(std::move(body));
+        _collisionGeometryCacheDirty = true;
         return static_cast<int>(Bodies.size()) - 1;
     }
 
@@ -266,6 +534,7 @@ namespace VCX::MainScene {
             addTankWall("tank_neg_z", Eigen::Vector3f(span,  span,  thick), Eigen::Vector3f(0.0f, 0.0f, -c));
             addTankWall("tank_pos_z", Eigen::Vector3f(span,  span,  thick), Eigen::Vector3f(0.0f, 0.0f,  c));
         };
+
 
         // 下面几个预设都按 Lab4 水槽尺寸缩小过，后面写入流体网格也方便。
         switch (preset) {
@@ -335,6 +604,46 @@ namespace VCX::MainScene {
                 }
                 AddBody(body);
             }
+            addLab1StyleTankBoundary();
+            break;
+        }
+        case RigidBodyPreset::BoatInWater: {
+            RigidBody boat;
+            boat.name        = "kenney_speed_boat";
+            boat.shape       = RigidBodyShape::BoatHull;
+            boat.dim         = Eigen::Vector3f(0.47f, 0.21f, 0.25f);
+            boat.x           = Eigen::Vector3f(-0.18f, -0.095f, -0.15f);
+            boat.q           = Eigen::Quaternionf::Identity();
+            boat.v           = Eigen::Vector3f(0.015f, 0.0f, 0.006f);
+            boat.w           = Eigen::Vector3f::Zero();
+            boat.mass        = 0.55f;
+            boat.restitution = 0.02f;
+            boat.friction    = 0.82f;
+            boat.useGravity  = true;
+            boat.color       = Eigen::Vector3f(0.18f, 0.42f, 0.86f);
+
+            // Kenney boat-speed-a 的 OBJ 顶点直接进入刚体数据。
+            // 渲染、FCL 碰撞、鼠标拾取、流体 solid mask、粒子投影和压力采样都使用这套三角网格。
+            boat.meshVertices  = KenneyBoatSpeedA::MakePhysicsVertices();
+            boat.meshTriIndices = KenneyBoatSpeedA::MakeTriangleIndices();
+            // 只给流体网格一个薄壳厚度，避免 cell center 正好落不到船体表面。
+            boat.solidShellThickness = 0.018f;
+
+            // 浮力点放在 Kenney 船体的底部/两侧下方，只有真实水粒子接近时才会被使用。
+            for (int ix = 0; ix < 6; ++ix) {
+                float const fx = (float(ix) / 5.0f) * 2.0f - 1.0f;
+                float const halfWidth = 0.030f + 0.065f * (1.0f - std::abs(fx));
+                for (int iz = 0; iz < 3; ++iz) {
+                    float const fz = float(iz - 1);
+                    RigidBuoyancySample sample;
+                    sample.localPosition = Eigen::Vector3f(0.185f * fx, -0.072f, halfWidth * fz);
+                    sample.volumeWeight  = 1.0f / 18.0f;
+                    sample.radius        = 0.030f;
+                    boat.buoyancySamples.push_back(sample);
+                }
+            }
+
+            AddBody(boat);
             addLab1StyleTankBoundary();
             break;
         }
@@ -451,12 +760,81 @@ namespace VCX::MainScene {
 
 
     void RigidBodySystem::CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const {
-        // 这里只采样几何表面，不碰流体；压力怎么用由 coupler 那边决定。
+        // 这里只采样几何表面，不碰流体；压力、浮力怎么用由 coupler 那边决定。
         if (! IsValidBody(bodyId)) return;
         auto const & body = Bodies[bodyId];
 
         int const n = std::max(1, samplesPerAxis);
         Eigen::Matrix3f const R = body.GetRotationMatrix();
+
+        if (body.shape == RigidBodyShape::BoatHull && ! body.meshVertices.empty() && body.meshTriIndices.size() >= 3) {
+            for (std::size_t i = 0; i + 2 < body.meshTriIndices.size(); i += 3) {
+                std::uint32_t const ia = body.meshTriIndices[i + 0];
+                std::uint32_t const ib = body.meshTriIndices[i + 1];
+                std::uint32_t const ic = body.meshTriIndices[i + 2];
+                if (ia >= body.meshVertices.size() || ib >= body.meshVertices.size() || ic >= body.meshVertices.size()) continue;
+
+                Eigen::Vector3f const & la = body.meshVertices[ia];
+                Eigen::Vector3f const & lb = body.meshVertices[ib];
+                Eigen::Vector3f const & lc = body.meshVertices[ic];
+                Eigen::Vector3f const localCross = (lb - la).cross(lc - la);
+                float const area = 0.5f * localCross.norm();
+                if (area <= kEps) continue;
+
+                Eigen::Vector3f const a = body.LocalToWorld(la);
+                Eigen::Vector3f const b = body.LocalToWorld(lb);
+                Eigen::Vector3f const c = body.LocalToWorld(lc);
+
+                RigidSurfaceSample sample;
+                sample.bodyId = bodyId;
+                sample.position = (a + b + c) / 3.0f;
+                sample.normal = body.GetRotationMatrix() * OrientedTriangleNormalLocal(body, la, lb, lc);
+                sample.area = area;
+                samples.push_back(sample);
+            }
+            return;
+        }
+
+        auto emitBoxFaces = [&](Eigen::Vector3f const & dim, Eigen::Matrix3f const & worldR, auto const & localToWorld) {
+            Eigen::Vector3f const half = 0.5f * dim;
+            auto emitFace = [&](int axis, float sign) {
+                int const uAxis = (axis + 1) % 3;
+                int const vAxis = (axis + 2) % 3;
+                float const faceArea = dim[uAxis] * dim[vAxis];
+                float const sampleArea = faceArea / float(n * n);
+
+                Eigen::Vector3f localNormal = Eigen::Vector3f::Zero();
+                localNormal[axis] = sign;
+                Eigen::Vector3f const worldNormal = SafeNormalized(worldR * localNormal);
+
+                for (int iu = 0; iu < n; ++iu) {
+                    for (int iv = 0; iv < n; ++iv) {
+                        float const fu = (float(iu) + 0.5f) / float(n) * 2.0f - 1.0f;
+                        float const fv = (float(iv) + 0.5f) / float(n) * 2.0f - 1.0f;
+
+                        Eigen::Vector3f localPoint = Eigen::Vector3f::Zero();
+                        localPoint[axis]  = sign * half[axis];
+                        localPoint[uAxis] = fu * half[uAxis];
+                        localPoint[vAxis] = fv * half[vAxis];
+
+                        RigidSurfaceSample sample;
+                        sample.bodyId   = bodyId;
+                        sample.position = localToWorld(localPoint);
+                        sample.normal   = worldNormal;
+                        sample.area     = sampleArea;
+                        samples.push_back(sample);
+                    }
+                }
+            };
+
+            emitFace(0,  1.0f);
+            emitFace(0, -1.0f);
+            emitFace(1,  1.0f);
+            emitFace(1, -1.0f);
+            emitFace(2,  1.0f);
+            emitFace(2, -1.0f);
+        };
+
 
         if (body.shape == RigidBodyShape::Sphere) {
             float const radius = 0.5f * body.dim.x();
@@ -481,43 +859,7 @@ namespace VCX::MainScene {
             return;
         }
 
-        Eigen::Vector3f const half = 0.5f * body.dim;
-        auto emitFace = [&](int axis, float sign) {
-            int const uAxis = (axis + 1) % 3;
-            int const vAxis = (axis + 2) % 3;
-            float const faceArea = body.dim[uAxis] * body.dim[vAxis];
-            float const sampleArea = faceArea / float(n * n);
-
-            Eigen::Vector3f localNormal = Eigen::Vector3f::Zero();
-            localNormal[axis] = sign;
-            Eigen::Vector3f const worldNormal = SafeNormalized(R * localNormal);
-
-            for (int iu = 0; iu < n; ++iu) {
-                for (int iv = 0; iv < n; ++iv) {
-                    float const fu = (float(iu) + 0.5f) / float(n) * 2.0f - 1.0f;
-                    float const fv = (float(iv) + 0.5f) / float(n) * 2.0f - 1.0f;
-
-                    Eigen::Vector3f localPoint = Eigen::Vector3f::Zero();
-                    localPoint[axis]  = sign * half[axis];
-                    localPoint[uAxis] = fu * half[uAxis];
-                    localPoint[vAxis] = fv * half[vAxis];
-
-                    RigidSurfaceSample sample;
-                    sample.bodyId   = bodyId;
-                    sample.position = body.LocalToWorld(localPoint);
-                    sample.normal   = worldNormal;
-                    sample.area     = sampleArea;
-                    samples.push_back(sample);
-                }
-            }
-        };
-
-        emitFace(0,  1.0f);
-        emitFace(0, -1.0f);
-        emitFace(1,  1.0f);
-        emitFace(1, -1.0f);
-        emitFace(2,  1.0f);
-        emitFace(2, -1.0f);
+        emitBoxFaces(body.dim, R, [&](Eigen::Vector3f const & p) { return body.LocalToWorld(p); });
     }
 
     void RigidBodySystem::SetBodyMass(int id, float mass) {
@@ -537,6 +879,7 @@ namespace VCX::MainScene {
             b.dim = Eigen::Vector3f::Constant(d);
         }
         b.UpdateMassProperties();
+        _collisionGeometryCacheDirty = true;
     }
 
     void RigidBodySystem::SetBodyStatic(int id, bool isStatic) {
@@ -569,6 +912,7 @@ namespace VCX::MainScene {
             b.dim = Eigen::Vector3f::Constant(d);
         }
         b.UpdateMassProperties();
+        _collisionGeometryCacheDirty = true;
     }
 
     void RigidBodySystem::Step(float dt, int substeps) {
@@ -625,13 +969,14 @@ namespace VCX::MainScene {
         RigidBody const & a = Bodies[idA];
         RigidBody const & b = Bodies[idB];
 
-        auto geomA = MakeCollisionGeometry(a);
-        auto geomB = MakeCollisionGeometry(b);
+        auto const & geomA = CollisionGeometryAt(idA);
+        auto const & geomB = CollisionGeometryAt(idB);
+        if (! geomA || ! geomB) return;
 
         fcl::CollisionObject<float> shapeA(geomA, fcl::Transform3f(Eigen::Translation3f(a.x) * a.q));
         fcl::CollisionObject<float> shapeB(geomB, fcl::Transform3f(Eigen::Translation3f(b.x) * b.q));
 
-        fcl::CollisionRequest<float> request(8, true);
+        fcl::CollisionRequest<float> request(24, true);
         fcl::CollisionResult<float>  result;
         fcl::collide(&shapeA, &shapeB, request, result);
         if (! result.isCollision()) return;
@@ -818,7 +1163,7 @@ namespace VCX::MainScene {
             auto & b = Bodies[i];
             if (b.isStatic || ! b.useGravity) continue;
 
-            int const requiredStaticContacts = (b.shape == RigidBodyShape::Box) ? 3 : 1;
+            int const requiredStaticContacts = (b.shape == RigidBodyShape::Sphere) ? 1 : 3;
             if (staticContactCount[i] < requiredStaticContacts) continue;
 
             if (b.v.norm() < RestingLinearThreshold && b.w.norm() < RestingAngularThreshold) {
