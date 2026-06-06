@@ -97,6 +97,7 @@ namespace VCX::MainScene {
 
         std::vector<float> m_renderSurfaceColor;
         std::vector<float> m_renderSurfacePhi;
+        std::vector<glm::vec3> m_renderSurfaceNormal;
         FluidSurfaceMesh   m_renderSurfaceMesh;
 
         glm::vec3 gravity { 0, -9.81f, 0 };

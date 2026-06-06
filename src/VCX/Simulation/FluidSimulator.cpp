@@ -764,6 +764,7 @@ namespace VCX::MainScene {
         if (needsResize) {
             m_renderSurfaceColor.assign(cellCount, 0.0f);
             m_renderSurfacePhi.assign(cellCount, 0.0f);
+            m_renderSurfaceNormal.assign(cellCount, glm::vec3(0.0f, 1.0f, 0.0f));
             m_renderSurfaceMesh.positions.clear();
             m_renderSurfaceMesh.normals.clear();
             m_renderSurfaceMesh.indices.clear();
@@ -1403,18 +1404,55 @@ namespace VCX::MainScene {
                 clampCoord(k, 0, m_renderSurfaceCellZ - 1))];
         };
 
+        if (m_renderSurfaceNormal.size() != std::size_t(renderCellCount))
+            m_renderSurfaceNormal.assign(renderCellCount, glm::vec3(0.0f, 1.0f, 0.0f));
+
+        for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+            for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                    int const id = renderIndex(i, j, k);
+                    if (! activeWork[id]) {
+                        m_renderSurfaceNormal[id] = glm::vec3(0.0f, 1.0f, 0.0f);
+                        continue;
+                    }
+
+                    glm::vec3 grad(
+                        (samplePhi(i + 1, j, k) - samplePhi(i - 1, j, k)) * 0.5f * m_renderSurfaceInvH,
+                        (samplePhi(i, j + 1, k) - samplePhi(i, j - 1, k)) * 0.5f * m_renderSurfaceInvH,
+                        (samplePhi(i, j, k + 1) - samplePhi(i, j, k - 1)) * 0.5f * m_renderSurfaceInvH);
+                    float const len = glm::length(grad);
+                    m_renderSurfaceNormal[id] = (len > 1e-6f) ? grad / len : glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+            }
+        }
+
         auto normalAt = [&](glm::vec3 const & p) {
             glm::vec3 g = (p + glm::vec3(0.5f)) * m_renderSurfaceInvH;
-            int const i = clampCoord(static_cast<int>(std::round(g.x)), 0, m_renderSurfaceCellX - 1);
-            int const j = clampCoord(static_cast<int>(std::round(g.y)), 0, m_renderSurfaceCellY - 1);
-            int const k = clampCoord(static_cast<int>(std::round(g.z)), 0, m_renderSurfaceCellZ - 1);
+            g.x = glm::clamp(g.x, 0.0f, float(m_renderSurfaceCellX - 1));
+            g.y = glm::clamp(g.y, 0.0f, float(m_renderSurfaceCellY - 1));
+            g.z = glm::clamp(g.z, 0.0f, float(m_renderSurfaceCellZ - 1));
 
-            glm::vec3 grad(
-                (samplePhi(i + 1, j, k) - samplePhi(i - 1, j, k)) * 0.5f * m_renderSurfaceInvH,
-                (samplePhi(i, j + 1, k) - samplePhi(i, j - 1, k)) * 0.5f * m_renderSurfaceInvH,
-                (samplePhi(i, j, k + 1) - samplePhi(i, j, k - 1)) * 0.5f * m_renderSurfaceInvH);
-            float const len = glm::length(grad);
-            return (len > 1e-6f) ? grad / len : glm::vec3(0.0f, 1.0f, 0.0f);
+            int const i0 = clampCoord(static_cast<int>(std::floor(g.x)), 0, m_renderSurfaceCellX - 1);
+            int const j0 = clampCoord(static_cast<int>(std::floor(g.y)), 0, m_renderSurfaceCellY - 1);
+            int const k0 = clampCoord(static_cast<int>(std::floor(g.z)), 0, m_renderSurfaceCellZ - 1);
+            int const i1 = std::min(i0 + 1, m_renderSurfaceCellX - 1);
+            int const j1 = std::min(j0 + 1, m_renderSurfaceCellY - 1);
+            int const k1 = std::min(k0 + 1, m_renderSurfaceCellZ - 1);
+            float const fx = glm::clamp(g.x - float(i0), 0.0f, 1.0f);
+            float const fy = glm::clamp(g.y - float(j0), 0.0f, 1.0f);
+            float const fz = glm::clamp(g.z - float(k0), 0.0f, 1.0f);
+
+            auto at = [&](int i, int j, int k) {
+                return m_renderSurfaceNormal[renderIndex(i, j, k)];
+            };
+
+            glm::vec3 const c00 = glm::mix(at(i0, j0, k0), at(i1, j0, k0), fx);
+            glm::vec3 const c10 = glm::mix(at(i0, j1, k0), at(i1, j1, k0), fx);
+            glm::vec3 const c01 = glm::mix(at(i0, j0, k1), at(i1, j0, k1), fx);
+            glm::vec3 const c11 = glm::mix(at(i0, j1, k1), at(i1, j1, k1), fx);
+            glm::vec3 const n = glm::mix(glm::mix(c00, c10, fy), glm::mix(c01, c11, fy), fz);
+            float const len = glm::length(n);
+            return (len > 1e-6f) ? n / len : glm::vec3(0.0f, 1.0f, 0.0f);
         };
 
         auto emitTriangle = [&](glm::vec3 const & a, glm::vec3 const & b, glm::vec3 const & c) {
