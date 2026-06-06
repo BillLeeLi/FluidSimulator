@@ -105,6 +105,7 @@ namespace VCX::MainScene {
                 }
             }
             _coupler.ApplyPressureForcesFromFluid(_fluid, _rigidBodies);
+            _coupler.ApplyBoatBuoyancyForces(_fluid, _rigidBodies);
             _rigidBodies.Step(sdt);
             _rigidBodies.ResolveTankBounds(-0.5f + _fluid.m_h, 0.5f - _fluid.m_h);
             _coupler.RasterizeRigidBodiesToFluid(_fluid, _rigidBodies);

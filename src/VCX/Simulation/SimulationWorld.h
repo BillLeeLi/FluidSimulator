@@ -76,7 +76,7 @@ namespace VCX::MainScene {
 
         int _selectedRigidBody { 0 };
         float _rigidKeyboardForce { 30.0f };
-        RigidBodyPreset _rigidBodyPreset { RigidBodyPreset::FluidCouplingMixed };
+        RigidBodyPreset _rigidBodyPreset { RigidBodyPreset::BoatInWater };
 
         struct RigidBodyResetFlag {
             std::string name;
