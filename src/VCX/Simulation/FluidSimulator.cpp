@@ -759,7 +759,7 @@ namespace VCX::MainScene {
         m_renderSurfaceH     = renderH;
         m_renderSurfaceInvH  = 1.0f / m_renderSurfaceH;
         if (m_renderSurfaceKernelRadius <= 0.0f)
-            m_renderSurfaceKernelRadius = 1.5f * m_h;
+            m_renderSurfaceKernelRadius = 1.8f * m_h;
 
         if (needsResize) {
             m_renderSurfaceColor.assign(cellCount, 0.0f);
@@ -1244,7 +1244,7 @@ namespace VCX::MainScene {
         std::fill(m_renderSurfaceColor.begin(), m_renderSurfaceColor.end(), 0.0f);
         std::vector<unsigned char> activePoint(renderCellCount, 0); // 记录实际参与表面建模的格点，后续进行模糊时不需要遍历全部格点
 
-        float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 2.5f * m_h;
+        float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 1.8f * m_h;
         float const invR   = 1.0f / radius;
         int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_renderSurfaceInvH)));
 
@@ -1256,8 +1256,8 @@ namespace VCX::MainScene {
             return s * s * s;
         };
 
-        float restFieldAccum = 0.0f;
-        int   restFieldCount = 0;
+        std::vector<float> restSamples;
+        restSamples.reserve(static_cast<std::size_t>(m_iNumSpheres));
 
         // 对每个粒子的近邻格子计算核函数累加到color上
         // 计算复杂度和粒子数成正比，而和场景大小无关
@@ -1287,13 +1287,18 @@ namespace VCX::MainScene {
 
         for (int id = 0; id < renderCellCount; ++id) {
             float const value = m_renderSurfaceColor[id];
-            if (value > 1e-6f) {
-                restFieldAccum += value;
-                ++restFieldCount;
-            }
+            if (value > 1e-6f) restSamples.push_back(value);
         }
-        // 用均值进行归一化
-        float const restField = (restFieldCount > 0) ? std::max(restFieldAccum / float(restFieldCount), 1e-6f) : 1.0f;
+
+        // percentile找到80%分位数作为restField
+        float restField = 1.0f;
+        if (! restSamples.empty()) {
+            std::size_t const percentileIndex = std::min(
+                restSamples.size() - 1,
+                static_cast<std::size_t>(0.80f * float(restSamples.size() - 1)));
+            std::nth_element(restSamples.begin(), restSamples.begin() + percentileIndex, restSamples.end());
+            restField = std::max(restSamples[percentileIndex], 1e-6f);
+        }
         for (float & value : m_renderSurfaceColor)
             value = glm::clamp(value / restField, 0.0f, 1.5f);
 
@@ -1360,6 +1365,36 @@ namespace VCX::MainScene {
 
         for (int id = 0; id < renderCellCount; ++id)
             m_renderSurfacePhi[id] = m_renderSurfaceIsoValue - m_renderSurfaceColor[id];
+
+        // 修补表面渲染中出现的破洞：如果一个格点的active邻居数和inside邻居数都超过一定阈值，则认为该格点也在内部
+        std::vector<float> filledPhi = m_renderSurfacePhi;
+        float const fillInsidePhi = -0.25f * m_renderSurfaceH;
+        for (int i = 1; i < m_renderSurfaceCellX - 1; ++i) {
+            for (int j = 1; j < m_renderSurfaceCellY - 1; ++j) {
+                for (int k = 1; k < m_renderSurfaceCellZ - 1; ++k) {
+                    int const id = renderIndex(i, j, k);
+                    if (! activeWork[id] || m_renderSurfacePhi[id] < 0.0f) continue;
+
+                    int insideNeighbors = 0;
+                    int activeNeighbors = 0;
+                    for (int di = -1; di <= 1; ++di) {
+                        for (int dj = -1; dj <= 1; ++dj) {
+                            for (int dk = -1; dk <= 1; ++dk) {
+                                if (di == 0 && dj == 0 && dk == 0) continue;
+                                int const nid = renderIndex(i + di, j + dj, k + dk);
+                                if (! activeWork[nid]) continue;
+                                ++activeNeighbors;
+                                if (m_renderSurfacePhi[nid] < 0.0f) ++insideNeighbors;
+                            }
+                        }
+                    }
+
+                    if (activeNeighbors >= 18 && insideNeighbors >= 18)
+                        filledPhi[id] = fillInsidePhi;
+                }
+            }
+        }
+        m_renderSurfacePhi.swap(filledPhi);
 
         auto samplePhi = [&](int i, int j, int k) {
             return m_renderSurfacePhi[renderIndex(

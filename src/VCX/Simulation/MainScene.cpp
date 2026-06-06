@@ -273,8 +273,9 @@ namespace VCX::MainScene {
             fluid.m_renderSurfaceFrameCounter = 0;
         if (ImGui::SliderInt("Surface Update Interval", &fluid.m_renderSurfaceUpdateInterval, 1, 6))
             fluid.m_renderSurfaceFrameCounter = 0;
+        ImGui::SliderFloat("Surface Iso Value", &fluid.m_renderSurfaceIsoValue, 0.2f, 0.8f, "%.2f");
         ImGui::SliderInt("Surface Blur Iters", &fluid.m_renderSurfaceBlurIters, 0, 3);
-        float kernelRadiusScale = fluid.m_h > 0.0f ? fluid.m_renderSurfaceKernelRadius / fluid.m_h : 1.5f;
+        float kernelRadiusScale = fluid.m_h > 0.0f ? fluid.m_renderSurfaceKernelRadius / fluid.m_h : 1.8f;
         if (ImGui::SliderFloat("Surface Kernel Radius", &kernelRadiusScale, 1.0f, 3.0f, "%.2fh"))
             fluid.m_renderSurfaceKernelRadius = kernelRadiusScale * fluid.m_h;
 
