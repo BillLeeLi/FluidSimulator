@@ -80,6 +80,7 @@ namespace VCX::MainScene {
         _movingBoundaryFaceCount = 0;
         std::fill(_pressureForcesByBody.begin(), _pressureForcesByBody.end(), Eigen::Vector3f::Zero());
         std::fill(_particleImpulsesByBody.begin(), _particleImpulsesByBody.end(), Eigen::Vector3f::Zero());
+        std::fill(_boatBuoyancyForcesByBody.begin(), _boatBuoyancyForcesByBody.end(), Eigen::Vector3f::Zero());
     }
 
     Eigen::Vector3f FluidSolidCoupler::PressureForceOnBody(int bodyId) const {
@@ -94,6 +95,13 @@ namespace VCX::MainScene {
             return Eigen::Vector3f::Zero();
         }
         return _particleImpulsesByBody[bodyId];
+    }
+
+    Eigen::Vector3f FluidSolidCoupler::BoatBuoyancyForceOnBody(int bodyId) const {
+        if (bodyId < 0 || bodyId >= static_cast<int>(_boatBuoyancyForcesByBody.size())) {
+            return Eigen::Vector3f::Zero();
+        }
+        return _boatBuoyancyForcesByBody[bodyId];
     }
 
     int FluidSolidCoupler::ProjectParticlesOutOfRigidBodies(FluidSimulator & fluid, RigidBodySystem & rigid) {
@@ -261,5 +269,105 @@ namespace VCX::MainScene {
         _pressureContactFaceCount += contactFaces;
         return contactFaces;
     }
+
+
+    int FluidSolidCoupler::ApplyBoatBuoyancyForces(FluidSimulator const & fluid, RigidBodySystem & rigid) {
+        if (_boatBuoyancyForcesByBody.size() != rigid.Bodies.size()) {
+            _boatBuoyancyForcesByBody.assign(rigid.Bodies.size(), Eigen::Vector3f::Zero());
+        }
+        if (! enableBoatBuoyancy || boatBuoyancyScale <= 0.0f) return 0;
+
+        auto estimateLocalWater = [&](Eigen::Vector3f const & worldPoint, float radius, float & waterY, Eigen::Vector3f & waterVelocity) -> bool {
+            if (fluid.m_iNumSpheres <= 0 || fluid.m_particlePos.empty()) return false;
+
+            float const searchR = std::max(2.8f * fluid.m_h, 1.8f * radius);
+            float const searchR2 = searchR * searchR;
+            float highestY = -1.0e9f;
+            Eigen::Vector3f velSum = Eigen::Vector3f::Zero();
+            int count = 0;
+
+            for (int i = 0; i < fluid.m_iNumSpheres; ++i) {
+                Eigen::Vector3f const p = ToEigen(fluid.m_particlePos[i]);
+                float const dx = p.x() - worldPoint.x();
+                float const dz = p.z() - worldPoint.z();
+                if (dx * dx + dz * dz > searchR2) continue;
+
+                highestY = std::max(highestY, p.y() + fluid.m_particleRadius);
+                if (i < static_cast<int>(fluid.m_particleVel.size())) {
+                    velSum += ToEigen(fluid.m_particleVel[i]);
+                }
+                ++count;
+            }
+
+            if (count == 0) return false;
+            waterY = highestY + boatWaterLevel;
+            waterVelocity = velSum / float(count);
+            return true;
+        };
+
+        int usedSamples = 0;
+        float const g = 9.81f;
+
+        for (int bodyId = 0; bodyId < static_cast<int>(rigid.Bodies.size()); ++bodyId) {
+            RigidBody const & body = rigid.Bodies[bodyId];
+            if (IsInternalTankBoundary(body) || body.isStatic) continue;
+            if (body.shape != RigidBodyShape::BoatHull) continue;
+
+            std::vector<RigidBuoyancySample> fallbackSamples;
+            std::vector<RigidBuoyancySample> const * samples = &body.buoyancySamples;
+            if (samples->empty()) {
+                for (int ix = 0; ix < 3; ++ix) {
+                    for (int iz = 0; iz < 3; ++iz) {
+                        RigidBuoyancySample s;
+                        s.localPosition = Eigen::Vector3f((ix - 1) * 0.08f, -0.06f, (iz - 1) * 0.05f);
+                        s.volumeWeight = 1.0f / 9.0f;
+                        s.radius = 0.035f;
+                        fallbackSamples.push_back(s);
+                    }
+                }
+                samples = &fallbackSamples;
+            }
+
+            float totalWeight = 0.0f;
+            for (auto const & sample : *samples) totalWeight += std::max(0.0f, sample.volumeWeight);
+            if (totalWeight <= kEps) continue;
+
+            for (auto const & sample : *samples) {
+                Eigen::Vector3f const worldPoint = body.LocalToWorld(sample.localPosition);
+                float const r = std::max(0.005f, sample.radius);
+
+                float waterY = 0.0f;
+                Eigen::Vector3f waterVelocity = Eigen::Vector3f::Zero();
+                if (! estimateLocalWater(worldPoint, r, waterY, waterVelocity)) continue;
+
+                float const depth = waterY - worldPoint.y();
+                float const submerge = std::clamp((depth + r) / (2.0f * r), 0.0f, 1.0f);
+                if (submerge <= 0.0f) continue;
+
+                float const weightShare = std::max(0.0f, sample.volumeWeight) / totalWeight;
+                Eigen::Vector3f force = Eigen::Vector3f::UnitY() * (body.mass * g * boatBuoyancyScale * weightShare * submerge);
+
+                Eigen::Vector3f relVel = rigid.VelocityAtPoint(bodyId, worldPoint) - waterVelocity;
+                float const relNorm = relVel.norm();
+                if (relNorm > 1.2f) relVel *= 1.2f / relNorm;
+
+                Eigen::Vector3f drag = -boatWaterDrag * body.mass * weightShare * submerge * relVel;
+                drag.y() *= 1.6f;
+                force += drag;
+
+                float const maxForce = 1.6f * body.mass * g * weightShare;
+                float const fNorm = force.norm();
+                if (fNorm > maxForce) force *= maxForce / fNorm;
+
+                rigid.ApplyForce(bodyId, force, worldPoint);
+                _boatBuoyancyForcesByBody[bodyId] += force;
+                ++usedSamples;
+            }
+        }
+
+        return usedSamples;
+    }
+
+
 
 } // namespace VCX::MainScene

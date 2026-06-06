@@ -1,4 +1,5 @@
 #include "Simulation/MainScene.h"
+#include "Simulation/KenneyBoatSpeedAMesh.h"
 #include "Common/ImGuiHelper.h"
 #include "Engine/app.h"
 
@@ -18,6 +19,12 @@ namespace VCX::MainScene {
 
         struct SphereMeshData {
             std::vector<glm::vec3>     vertices;
+            std::vector<std::uint32_t> triIndices;
+            std::vector<std::uint32_t> lineIndices;
+        };
+
+        struct BoatMeshData {
+            std::vector<glm::vec3>     localVertices;
             std::vector<std::uint32_t> triIndices;
             std::vector<std::uint32_t> lineIndices;
         };
@@ -138,6 +145,17 @@ namespace VCX::MainScene {
             return mesh;
         }
 
+        BoatMeshData const & GetUnitBoatMesh() {
+            static BoatMeshData mesh = []() {
+                BoatMeshData data;
+                data.localVertices = KenneyBoatSpeedA::MakeRenderVertices();
+                data.triIndices    = KenneyBoatSpeedA::MakeTriangleIndices();
+                data.lineIndices   = KenneyBoatSpeedA::MakeLineIndices();
+                return data;
+            }();
+            return mesh;
+        }
+
         Eigen::Vector3f SafeNormalized(Eigen::Vector3f const & v, Eigen::Vector3f const & fallback = Eigen::Vector3f::UnitZ()) {
             float const n = v.norm();
             return n > kEps ? (v / n) : fallback;
@@ -222,6 +240,69 @@ namespace VCX::MainScene {
             hitPoint = rayOrigin + tHit * rayDir;
             return true;
         }
+
+        bool IntersectRayTriangle(
+            Eigen::Vector3f const & origin,
+            Eigen::Vector3f const & dir,
+            Eigen::Vector3f const & a,
+            Eigen::Vector3f const & b,
+            Eigen::Vector3f const & c,
+            float & tHit) {
+            Eigen::Vector3f const e1 = b - a;
+            Eigen::Vector3f const e2 = c - a;
+            Eigen::Vector3f const h  = dir.cross(e2);
+            float const det = e1.dot(h);
+            if (std::abs(det) < kEps) return false;
+
+            float const invDet = 1.0f / det;
+            Eigen::Vector3f const s = origin - a;
+            float const u = invDet * s.dot(h);
+            if (u < -1e-5f || u > 1.0f + 1e-5f) return false;
+
+            Eigen::Vector3f const q = s.cross(e1);
+            float const v = invDet * dir.dot(q);
+            if (v < -1e-5f || u + v > 1.0f + 1e-5f) return false;
+
+            float const t = invDet * e2.dot(q);
+            if (t < 0.0f) return false;
+            tHit = t;
+            return true;
+        }
+
+        bool IntersectRayBoatMesh(
+            Eigen::Vector3f const & rayOrigin,
+            Eigen::Vector3f const & rayDir,
+            RigidBody const &       body,
+            float &                 tHit,
+            Eigen::Vector3f &       hitPoint) {
+            if (body.meshVertices.empty() || body.meshTriIndices.size() < 3) return false;
+
+            Eigen::Matrix3f const R = body.GetRotationMatrix();
+            Eigen::Vector3f const localOrigin = R.transpose() * (rayOrigin - body.x);
+            Eigen::Vector3f const localDir    = SafeNormalized(R.transpose() * rayDir, Eigen::Vector3f::UnitZ());
+
+            bool  found = false;
+            float bestT = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i + 2 < body.meshTriIndices.size(); i += 3) {
+                std::uint32_t const ia = body.meshTriIndices[i + 0];
+                std::uint32_t const ib = body.meshTriIndices[i + 1];
+                std::uint32_t const ic = body.meshTriIndices[i + 2];
+                if (ia >= body.meshVertices.size() || ib >= body.meshVertices.size() || ic >= body.meshVertices.size()) continue;
+
+                float t = 0.0f;
+                if (! IntersectRayTriangle(localOrigin, localDir, body.meshVertices[ia], body.meshVertices[ib], body.meshVertices[ic], t)) continue;
+                if (t < bestT) {
+                    bestT = t;
+                    found = true;
+                }
+            }
+
+            if (! found) return false;
+            Eigen::Vector3f const localHit = localOrigin + bestT * localDir;
+            hitPoint = body.LocalToWorld(localHit);
+            tHit = (hitPoint - rayOrigin).dot(rayDir);
+            return tHit >= 0.0f;
+        }
     } // namespace
 
     MainScene::MainScene(std::initializer_list<Assets::ExampleScene> && scenes):
@@ -298,9 +379,9 @@ namespace VCX::MainScene {
         auto & coupler = _world.GetCoupler();
         if (! ImGui::CollapsingHeader("Rigid Body Controls", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-        char const * presetNames[] = { "Fluid Coupling Mixed", "Box Collision", "Mixed Stack" };
+        char const * presetNames[] = { "Fluid Coupling Mixed", "Box Collision", "Mixed Stack", "Boat In Water" };
         int          preset        = int(_world.RigidPreset());
-        if (ImGui::Combo("Rigid Preset", &preset, presetNames, 3)) {
+        if (ImGui::Combo("Rigid Preset", &preset, presetNames, 4)) {
             _world.SetRigidPreset(RigidBodyPreset(preset));
             RebuildRigidBodyRenderItem();
         }
@@ -335,7 +416,8 @@ namespace VCX::MainScene {
 
             auto & body = rigid.Bodies[selected];
             ImGui::Text("Name: %s", body.name.c_str());
-            ImGui::Text("Shape: %s", body.shape == RigidBodyShape::Box ? "Box" : "Sphere");
+            char const * shapeName = body.shape == RigidBodyShape::Box ? "Box" : (body.shape == RigidBodyShape::Sphere ? "Sphere" : "BoatHull");
+            ImGui::Text("Shape: %s", shapeName);
 
             bool isStatic = body.isStatic;
             if (ImGui::Checkbox("Static", &isStatic)) rigid.SetBodyStatic(selected, isStatic);
@@ -354,6 +436,9 @@ namespace VCX::MainScene {
                 if (ImGui::SliderFloat("Sphere Diameter", &diameter, 0.04f, 0.30f)) {
                     rigid.SetBodyDim(selected, Eigen::Vector3f::Constant(diameter));
                 }
+            } else if (body.shape == RigidBodyShape::BoatHull) {
+                ImGui::Text("Mesh Vertices: %d", int(body.meshVertices.size()));
+                ImGui::Text("Mesh Triangles: %d", int(body.meshTriIndices.size() / 3));
             } else {
                 if (ImGui::SliderFloat3("Box Size", &dim.x, 0.04f, 0.30f)) {
                     rigid.SetBodyDim(selected, ToEigen(dim));
@@ -376,6 +461,8 @@ namespace VCX::MainScene {
             ImGui::Text("Pressure Force: %.3f %.3f %.3f", pressureForce.x(), pressureForce.y(), pressureForce.z());
             Eigen::Vector3f const particleImpulse = coupler.ParticleImpulseOnBody(selected);
             ImGui::Text("Particle Impulse: %.5f %.5f %.5f", particleImpulse.x(), particleImpulse.y(), particleImpulse.z());
+            Eigen::Vector3f const buoyancyForce = coupler.BoatBuoyancyForceOnBody(selected);
+            ImGui::Text("Boat Buoyancy: %.3f %.3f %.3f", buoyancyForce.x(), buoyancyForce.y(), buoyancyForce.z());
         }
 
         float pointForce = _world.RigidKeyboardForce();
@@ -387,9 +474,13 @@ namespace VCX::MainScene {
         ImGui::Checkbox("Enable Pressure Force", &coupler.enablePressureForce);
         ImGui::Checkbox("Enable Moving Solid Velocity", &coupler.enableMovingSolidVelocity);
         ImGui::Checkbox("Enable Particle Collision Impulse", &coupler.enableParticleCollisionImpulse);
+        ImGui::Checkbox("Enable Extra Boat Buoyancy", &coupler.enableBoatBuoyancy);
         ImGui::SliderFloat("Pressure Force Scale", &coupler.pressureForceScale, 0.0f, 500.0f);
         ImGui::SliderFloat("Max Pressure For Force", &coupler.maxPressureForForce, 0.0f, 400.0f);
         ImGui::SliderFloat("Particle Impulse Scale", &coupler.particleImpulseScale, 0.0f, 1.0f);
+        ImGui::SliderFloat("Boat Water Offset", &coupler.boatWaterLevel, -0.08f, 0.08f);
+        ImGui::SliderFloat("Boat Buoyancy Scale", &coupler.boatBuoyancyScale, 0.0f, 2.0f);
+        ImGui::SliderFloat("Boat Water Drag", &coupler.boatWaterDrag, 0.0f, 10.0f);
 
         ImGui::Checkbox("Draw Rigid Solid", &_drawRigidSolid);
         ImGui::Checkbox("Draw Rigid Wireframe", &_drawRigidWireframe);
@@ -479,7 +570,27 @@ namespace VCX::MainScene {
             bool const selected = (i == _world.SelectedRigidBody());
             bool const hovered  = (_hoverHasHit && i == _hoverRigidBodyId);
 
-            if (body.shape == RigidBodyShape::Box) {
+            if (body.shape == RigidBodyShape::BoatHull) {
+                auto verts = GetRigidBoatVertices(body);
+                auto span  = Engine::make_span_bytes<glm::vec3>(verts);
+
+                glm::vec3 lineColor = body.isStatic ? glm::vec3(0.90f, 0.90f, 0.90f) : glm::vec3(1.0f, 1.0f, 1.0f);
+                if (selected && ! body.isStatic) lineColor = glm::vec3(1.0f, 0.95f, 0.20f);
+                if (hovered && ! body.isStatic) lineColor = glm::vec3(0.20f, 1.0f, 0.35f);
+
+                if (_drawRigidSolid && _rigidBoatItem) {
+                    _lineprogram.GetUniforms().SetByName("u_Color", ToGlm(body.color));
+                    _rigidBoatItem->UpdateVertexBuffer("position", span);
+                    _rigidBoatItem->Draw({ _lineprogram.Use() });
+                }
+                if (_drawRigidWireframe && _rigidBoatLineItem) {
+                    _lineprogram.GetUniforms().SetByName("u_Color", lineColor);
+                    glLineWidth(_rigidLineWidth);
+                    _rigidBoatLineItem->UpdateVertexBuffer("position", span);
+                    _rigidBoatLineItem->Draw({ _lineprogram.Use() });
+                    glLineWidth(1.0f);
+                }
+            } else if (body.shape == RigidBodyShape::Box) {
                 auto verts = GetRigidBoxVertices(body);
                 auto span  = Engine::make_span_bytes<glm::vec3>(verts);
 
@@ -672,6 +783,17 @@ namespace VCX::MainScene {
             Engine::GL::PrimitiveType::Lines);
         _rigidSphereLineItem->UpdateElementBuffer(sphereMesh.lineIndices);
 
+        auto const & boatMesh = GetUnitBoatMesh();
+        _rigidBoatItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Triangles);
+        _rigidBoatItem->UpdateElementBuffer(boatMesh.triIndices);
+
+        _rigidBoatLineItem.emplace(
+            Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
+            Engine::GL::PrimitiveType::Lines);
+        _rigidBoatLineItem->UpdateElementBuffer(boatMesh.lineIndices);
+
         _rigidContactPointItem.emplace(
             Engine::GL::VertexLayout().Add<glm::vec3>("position", Engine::GL::DrawFrequency::Stream, 0),
             Engine::GL::PrimitiveType::Points);
@@ -702,6 +824,8 @@ namespace VCX::MainScene {
             bool            ok  = false;
             if (body.shape == RigidBodyShape::Sphere) {
                 ok = IntersectRaySphere(rayOrigin, rayDir, body, t, hit);
+            } else if (body.shape == RigidBodyShape::BoatHull) {
+                ok = IntersectRayBoatMesh(rayOrigin, rayDir, body, t, hit);
             } else {
                 ok = IntersectRayOBB(rayOrigin, rayDir, body, t, hit);
             }
@@ -757,6 +881,19 @@ namespace VCX::MainScene {
             Eigen::Vector3f const local(p.x, p.y, p.z);
             Eigen::Vector3f const world = body.x + radius * (R * local);
             verts.push_back(ToGlm(world));
+        }
+        return verts;
+    }
+
+    std::vector<glm::vec3> MainScene::GetRigidBoatVertices(RigidBody const & body) const {
+        BoatMeshData const & boatMesh = GetUnitBoatMesh();
+        std::vector<glm::vec3> verts;
+        verts.reserve(boatMesh.localVertices.size());
+
+        Eigen::Matrix3f const R = body.GetRotationMatrix();
+        for (glm::vec3 const & p : boatMesh.localVertices) {
+            Eigen::Vector3f const local(p.x, p.y, p.z);
+            verts.push_back(ToGlm(body.x + R * local));
         }
         return verts;
     }

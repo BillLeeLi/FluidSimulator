@@ -66,6 +66,8 @@ namespace VCX::MainScene {
         std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoxLineItem;
         std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidSphereItem;
         std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidSphereLineItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoatItem;
+        std::optional<Engine::GL::UniqueIndexedRenderItem> _rigidBoatLineItem;
         std::optional<Engine::GL::UniqueRenderItem>        _rigidContactPointItem;
 
         std::pair<std::uint32_t, std::uint32_t> _viewportSize { 1, 1 };
@@ -104,6 +106,7 @@ namespace VCX::MainScene {
         bool                  UpdateDraggedRigidBody(ImVec2 const & pos);
         std::vector<glm::vec3> GetRigidBoxVertices(RigidBody const & body) const;
         std::vector<glm::vec3> GetRigidSphereVertices(RigidBody const & body) const;
+        std::vector<glm::vec3> GetRigidBoatVertices(RigidBody const & body) const;
         std::vector<glm::vec3> GetRigidContactVertices() const;
         WorldRay              ScreenPointToWorldRay(ImVec2 const & pos) const;
     };
