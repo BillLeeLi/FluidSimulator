@@ -1,7 +1,7 @@
 #include "Simulation/MainScene.h"
-#include "Simulation/KenneyBoatSpeedAMesh.h"
 #include "Common/ImGuiHelper.h"
 #include "Engine/app.h"
+#include "Simulation/KenneyBoatSpeedAMesh.h"
 
 #include <algorithm>
 #include <array>
@@ -247,20 +247,20 @@ namespace VCX::MainScene {
             Eigen::Vector3f const & a,
             Eigen::Vector3f const & b,
             Eigen::Vector3f const & c,
-            float & tHit) {
-            Eigen::Vector3f const e1 = b - a;
-            Eigen::Vector3f const e2 = c - a;
-            Eigen::Vector3f const h  = dir.cross(e2);
-            float const det = e1.dot(h);
+            float &                 tHit) {
+            Eigen::Vector3f const e1  = b - a;
+            Eigen::Vector3f const e2  = c - a;
+            Eigen::Vector3f const h   = dir.cross(e2);
+            float const           det = e1.dot(h);
             if (std::abs(det) < kEps) return false;
 
-            float const invDet = 1.0f / det;
-            Eigen::Vector3f const s = origin - a;
-            float const u = invDet * s.dot(h);
+            float const           invDet = 1.0f / det;
+            Eigen::Vector3f const s      = origin - a;
+            float const           u      = invDet * s.dot(h);
             if (u < -1e-5f || u > 1.0f + 1e-5f) return false;
 
             Eigen::Vector3f const q = s.cross(e1);
-            float const v = invDet * dir.dot(q);
+            float const           v = invDet * dir.dot(q);
             if (v < -1e-5f || u + v > 1.0f + 1e-5f) return false;
 
             float const t = invDet * e2.dot(q);
@@ -277,7 +277,7 @@ namespace VCX::MainScene {
             Eigen::Vector3f &       hitPoint) {
             if (body.meshVertices.empty() || body.meshTriIndices.size() < 3) return false;
 
-            Eigen::Matrix3f const R = body.GetRotationMatrix();
+            Eigen::Matrix3f const R           = body.GetRotationMatrix();
             Eigen::Vector3f const localOrigin = R.transpose() * (rayOrigin - body.x);
             Eigen::Vector3f const localDir    = SafeNormalized(R.transpose() * rayDir, Eigen::Vector3f::UnitZ());
 
@@ -299,8 +299,8 @@ namespace VCX::MainScene {
 
             if (! found) return false;
             Eigen::Vector3f const localHit = localOrigin + bestT * localDir;
-            hitPoint = body.LocalToWorld(localHit);
-            tHit = (hitPoint - rayOrigin).dot(rayDir);
+            hitPoint                       = body.LocalToWorld(localHit);
+            tHit                           = (hitPoint - rayOrigin).dot(rayDir);
             return tHit >= 0.0f;
         }
     } // namespace
@@ -356,6 +356,7 @@ namespace VCX::MainScene {
             fluid.m_renderSurfaceFrameCounter = 0;
         ImGui::SliderFloat("Surface Iso Value", &fluid.m_renderSurfaceIsoValue, 0.2f, 0.8f, "%.2f");
         ImGui::SliderInt("Surface Blur Iters", &fluid.m_renderSurfaceBlurIters, 0, 3);
+        ImGui::SliderFloat("Surface Tension", &fluid.m_surfaceTension, 0.01f, 0.1f, "%.3f");
         float kernelRadiusScale = fluid.m_h > 0.0f ? fluid.m_renderSurfaceKernelRadius / fluid.m_h : 1.8f;
         if (ImGui::SliderFloat("Surface Kernel Radius", &kernelRadiusScale, 1.0f, 3.0f, "%.2fh"))
             fluid.m_renderSurfaceKernelRadius = kernelRadiusScale * fluid.m_h;
@@ -375,7 +376,7 @@ namespace VCX::MainScene {
     }
 
     void MainScene::DrawRigidBodyControls() {
-        auto & rigid = _world.GetRigidBodies();
+        auto & rigid   = _world.GetRigidBodies();
         auto & coupler = _world.GetCoupler();
         if (! ImGui::CollapsingHeader("Rigid Body Controls", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
@@ -536,10 +537,10 @@ namespace VCX::MainScene {
         _BoundaryItem.Draw({ _lineprogram.Use() });
         glLineWidth(1.0f);
 
-        auto const & fluid = _world.GetFluid();
-        auto const & surface = fluid.GetRenderableSurface();
-        bool const drawFluidParticles = _fluidRenderMode == 0 || _fluidRenderMode == 2;
-        bool const drawFluidSurface   = _fluidRenderMode == 1 || _fluidRenderMode == 2;
+        auto const & fluid              = _world.GetFluid();
+        auto const & surface            = fluid.GetRenderableSurface();
+        bool const   drawFluidParticles = _fluidRenderMode == 0 || _fluidRenderMode == 2;
+        bool const   drawFluidSurface   = _fluidRenderMode == 1 || _fluidRenderMode == 2;
 
         if (drawFluidSurface && _fluidSurfaceItem && ! surface.indices.empty()) {
             _fluidSurfaceOffsets.assign(surface.positions.size(), glm::vec3(0.0f));
@@ -886,7 +887,7 @@ namespace VCX::MainScene {
     }
 
     std::vector<glm::vec3> MainScene::GetRigidBoatVertices(RigidBody const & body) const {
-        BoatMeshData const & boatMesh = GetUnitBoatMesh();
+        BoatMeshData const &   boatMesh = GetUnitBoatMesh();
         std::vector<glm::vec3> verts;
         verts.reserve(boatMesh.localVertices.size());
 
