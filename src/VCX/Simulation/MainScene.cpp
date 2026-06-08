@@ -472,6 +472,9 @@ namespace VCX::MainScene {
         }
 
         ImGui::Checkbox("Enable Rigid Solid Mask", &coupler.enableRigidSolidMask);
+        ImGui::Checkbox("Enable Variational Projection", &coupler.enableVariationalProjection);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Experimental: solve one pressure system that projects fluid velocity and rigid-body velocity together. Falls back to the old pressure projection if the solve fails.");
         ImGui::Checkbox("Enable Pressure Force", &coupler.enablePressureForce);
         ImGui::Checkbox("Enable Moving Solid Velocity", &coupler.enableMovingSolidVelocity);
         ImGui::Checkbox("Enable Particle Collision Impulse", &coupler.enableParticleCollisionImpulse);

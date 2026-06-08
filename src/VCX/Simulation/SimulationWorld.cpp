@@ -104,14 +104,16 @@ namespace VCX::MainScene {
                     _externalImpulse.setZero();
                 }
             }
-            _coupler.ApplyPressureForcesFromFluid(_fluid, _rigidBodies);
+            if (! _coupler.enableVariationalProjection) {
+                _coupler.ApplyPressureForcesFromFluid(_fluid, _rigidBodies);
+            }
             _coupler.ApplyBoatBuoyancyForces(_fluid, _rigidBodies);
             _rigidBodies.Step(sdt);
             _rigidBodies.ResolveTankBounds(-0.5f + _fluid.m_h, 0.5f - _fluid.m_h);
             _coupler.RasterizeRigidBodiesToFluid(_fluid, _rigidBodies);
 
-            // 2. Fluid part.  This is intentionally kept in the original order so
-            // the old FLIP fluid behavior is not disturbed before coupling is added.
+            // 2. Fluid part.  Particle motion stays on the original FLIP path;
+            // the pressure projection can switch to the experimental joint solve.
             _fluid.integrateParticles(sdt);
             _fluid.handleParticleCollisions();
             _coupler.ProjectParticlesOutOfRigidBodies(_fluid, _rigidBodies);
@@ -127,8 +129,14 @@ namespace VCX::MainScene {
             }
             _fluid.transferVelocities(true, flipRatio);
             _fluid.updateParticleDensity();
-            _coupler.ApplyRigidBoundaryVelocitiesToFluid(_fluid, _rigidBodies);
-            _fluid.solveIncompressibility(_numPressureIters, sdt, _overRelaxation, _compensateDrift);
+            bool variationalSolved = false;
+            if (_coupler.enableVariationalProjection) {
+                variationalSolved = _coupler.SolveVariationalProjection(_fluid, _rigidBodies, sdt);
+            }
+            if (! variationalSolved) {
+                _coupler.ApplyRigidBoundaryVelocitiesToFluid(_fluid, _rigidBodies);
+                _fluid.solveIncompressibility(_numPressureIters, sdt, _overRelaxation, _compensateDrift);
+            }
             _fluid.transferVelocities(false, flipRatio);
         }
 

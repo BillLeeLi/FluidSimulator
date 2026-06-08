@@ -59,6 +59,12 @@ namespace VCX::MainScene {
         float           area     = 0.0f;
     };
 
+    // 刚体耦合求解使用 6 维广义速度 V = [线速度v, 角速度w]。
+    // 压力冲量会同时改变平动和转动，因此 coupler 不再只读写 body.v。
+    using RigidGeneralizedVelocity = Eigen::Matrix<float, 6, 1>;
+    // 广义逆质量矩阵 M_s^-1 = diag(1/m I, I_world^-1)，静态刚体返回零矩阵。
+    using RigidInverseMassBlock    = Eigen::Matrix<float, 6, 6>;
+
     struct RigidBody {
         RigidBodyShape     shape = RigidBodyShape::Box;
         Eigen::Vector3f    dim   = Eigen::Vector3f::Ones(); // 盒子是完整长宽高，球用直径
@@ -153,6 +159,11 @@ namespace VCX::MainScene {
 
         int             GetFirstDynamicBody() const;
         Eigen::Vector3f VelocityAtPoint(int id, Eigen::Vector3f const & worldPoint) const;
+        // 读取/写回 [v, w]，供流固耦合投影统一修正刚体速度。
+        RigidGeneralizedVelocity GetGeneralizedVelocity(int id) const;
+        void SetGeneralizedVelocity(int id, RigidGeneralizedVelocity const & velocity);
+        // 返回 6x6 的 M_s^-1，用于组装刚体项 J M_s^-1 J^T。
+        RigidInverseMassBlock GetInverseMassBlock(int id) const;
         // 后面算流体压力时可以直接遍历这些采样点。
         void            CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const;
         bool            IsValidBody(int id) const;

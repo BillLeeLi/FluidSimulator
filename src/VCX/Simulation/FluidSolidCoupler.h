@@ -16,13 +16,15 @@ namespace VCX::MainScene {
         bool  enableMovingSolidVelocity { true };
         bool  enableParticleCollisionImpulse { true };
         bool  enableBoatBuoyancy { false };
+        bool  enableVariationalProjection { false };
         float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
         float particleImpulseScale { 0.5f };
         float boatWaterLevel       { 0.0f }; // 这里作为根据真实粒子表面估计水位后的微调量
         float boatBuoyancyScale    { 1.08f };
         float boatWaterDrag        { 3.0f };
-
+        // 使用变分投影方法，同时更新流体和刚体
+        bool SolveVariationalProjection(FluidSimulator & fluid, RigidBodySystem & rigid, float dt);
         void ResetDebug();
         // 将所有穿透刚体的粒子投影到最近的表面点，并调整速度以消除穿透分量
         int  ProjectParticlesOutOfRigidBodies(FluidSimulator & fluid, RigidBodySystem & rigid);

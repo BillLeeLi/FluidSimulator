@@ -2,6 +2,9 @@
 #include "Simulation/FluidSimulator.h"
 #include "Simulation/RigidBodySystem.h"
 
+#include <Eigen/IterativeLinearSolvers>
+#include <Eigen/Sparse>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,6 +13,25 @@ namespace VCX::MainScene {
 
     namespace {
         constexpr float kEps = 1e-6f;
+        constexpr float kFluidDensity = 1.0f;
+
+        struct RigidRowContribution {
+            // 一个压力 dof 对某个刚体的线性耦合项
+            // g 表示“该压力未知量对应的面冲量”作用到刚体广义速度 [v,w] 上的方向，
+            // 后面会用 g^T V* 进入右端项，用 g^T M_s^-1 g 进入矩阵 A。
+            int                      dof = -1;
+            RigidGeneralizedVelocity g   = RigidGeneralizedVelocity::Zero();
+        };
+
+        struct BodyProjectionCache {
+            // 每个刚体本次投影的临时缓存
+            // vStar 是投影前刚体速度，invMass 是 M_s^-1，rows 是它接触到哪些压力 dof。
+            int                      bodyId = -1;
+            RigidGeneralizedVelocity vStar  = RigidGeneralizedVelocity::Zero();
+            RigidInverseMassBlock    invMass = RigidInverseMassBlock::Zero();
+            std::vector<RigidRowContribution> rows;
+        };
+
         std::array<glm::ivec3, 6> const kNeighborOffsets = {
             glm::ivec3( 1,  0,  0),
             glm::ivec3(-1,  0,  0),
@@ -45,14 +67,6 @@ namespace VCX::MainScene {
             return face;
         }
 
-        Eigen::Vector3f FaceCenter(FluidSimulator const & fluid, glm::ivec3 const & face, int dir) {
-            glm::vec3 pos(float(face.x), float(face.y), float(face.z));
-            if (dir != 0) pos.x += 0.5f;
-            if (dir != 1) pos.y += 0.5f;
-            if (dir != 2) pos.z += 0.5f;
-            return ToEigen(pos * fluid.m_h + glm::vec3(-0.5f));
-        }
-
         glm::ivec3 ClampCell(FluidSimulator const & fluid, glm::ivec3 cell) {
             return glm::ivec3(
                 std::clamp(cell.x, 0, fluid.m_iCellX - 1),
@@ -72,6 +86,225 @@ namespace VCX::MainScene {
         }
 
     } // namespace
+
+    bool FluidSolidCoupler::SolveVariationalProjection(FluidSimulator & fluid, RigidBodySystem & rigid, float dt) {
+        if (dt <= 0.0f || fluid.m_iNumCells <= 0 || fluid.m_type.empty() || fluid.m_vel.empty()) {
+            return false;
+        }
+
+        FluidPressureDofs const dofs = fluid.BuildPressureDofs();
+        int const          numDofs = static_cast<int>(dofs.dofCell.size());
+        if (numDofs == 0) return false;
+
+        // u*为压力投影之前的 MAC 网格速度。
+        std::vector<glm::vec3> const uStar = fluid.m_vel;
+        fluid.m_pre_vel = uStar;
+
+        // Eigen::Triplet(row,col,value) 用来构建稀疏矩阵
+        std::vector<Eigen::Triplet<float>> trips;
+        trips.reserve(static_cast<std::size_t>(numDofs) * 8);
+        Eigen::VectorXf rhs = Eigen::VectorXf::Zero(numDofs);
+
+        // 密度固定，且用最简单的均匀密度和完整 face 面积，没有搞占比权重
+        // area 是 face 面积，mass 是一个 face 控制体的近似流体质量，invMass 对应 M_f^-1。
+        float const h    = std::max(fluid.m_h, kEps);
+        float const area = h * h;
+        float const mass = std::max(kFluidDensity * h * h * h, kEps);
+        float const invMass = 1.0f / mass;
+
+        auto addMatrix = [&](int row, int col, float value) {
+            if (row < 0 || col < 0 || std::abs(value) <= 1e-12f) return;
+            trips.emplace_back(row, col, value);
+        };
+
+        auto addFluidFace = [&](glm::ivec3 const & face, int dir) {
+            // 每个 MAC face 连接两个压力 cell，计算该face流体产生的散度
+            if (! fluid.IsVelocityFaceInRange(face, dir)) return;
+
+            auto const [lowerCell, upperCell] = fluid.FaceNeighborCells(face, dir);
+            int const lowerDof = fluid.PressureDofForCell(dofs, lowerCell);
+            int const upperDof = fluid.PressureDofForCell(dofs, upperCell);
+            if (lowerDof < 0 && upperDof < 0) return;
+
+            float const u = fluid.FaceVelocity(uStar, face, dir);
+
+            std::array<std::pair<int, float>, 2> coeffs {
+                std::pair<int, float> { lowerDof,  area },
+                std::pair<int, float> { upperDof, -area },
+            };
+
+            for (auto const & a : coeffs) {
+                if (a.first < 0) continue;
+                // b 里放的是当前预测速度 u* 带来的通量，需要用压力冲量抵消。
+                rhs[a.first] += a.second * u;
+                for (auto const & b : coeffs) {
+                    if (b.first < 0) continue;
+                    // A 的流体部分加入的是 B_f M_f^-1 B_f^T
+                    addMatrix(a.first, b.first, a.second * invMass * b.second);
+                }
+            }
+
+            // 固定/已知速度边界不是未知量，不进入 A做耦合，只作为已知通量移动到 b。
+            if (fluid.HasSolidBoundaryVelocity(face.x, face.y, face.z, dir)) {
+                float const uSolid = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                if (lowerDof >= 0 && upperDof < 0) rhs[lowerDof] -= area * uSolid;
+                if (upperDof >= 0 && lowerDof < 0) rhs[upperDof] += area * uSolid;
+            }
+        };
+
+        // 遍历所有 MAC face，先组装纯流体压力投影项。
+        for (int i = 0; i < fluid.m_iCellX; ++i) {
+            for (int j = 0; j < fluid.m_iCellY; ++j) {
+                for (int k = 0; k < fluid.m_iCellZ; ++k) {
+                    glm::ivec3 const face(i, j, k);
+                    addFluidFace(face, 0);
+                    addFluidFace(face, 1);
+                    addFluidFace(face, 2);
+                }
+            }
+        }
+
+        std::vector<BodyProjectionCache> bodyCaches;
+        bodyCaches.reserve(rigid.Bodies.size());
+
+        // 把刚体-流体接触面转换成压力 dof 与刚体广义速度之间的耦合关系。
+        // 这里同流体一样做了简化，扫描刚体 AABB 内被刚体占据的 solidCell，找相邻的 FLUID_CELL，而不是考虑一个cell内的流-固占比和分界
+        for (int bodyId = 0; bodyId < static_cast<int>(rigid.Bodies.size()); ++bodyId) {
+            RigidBody const & body = rigid.Bodies[bodyId];
+            if (IsInternalTankBoundary(body)) continue;
+
+            BodyProjectionCache cache;
+            cache.bodyId  = bodyId;
+            cache.vStar   = rigid.GetGeneralizedVelocity(bodyId);
+            cache.invMass = rigid.GetInverseMassBlock(bodyId);
+
+            auto const [lo, hi] = BodyCellRange(fluid, body);
+            for (int i = lo.x; i <= hi.x; ++i) {
+                for (int j = lo.y; j <= hi.y; ++j) {
+                    for (int k = lo.z; k <= hi.z; ++k) {
+                        glm::ivec3 const solidCell(i, j, k);
+                        if (! body.ContainsPoint(ToEigen(fluid.CellCenter(solidCell)))) continue;
+
+                        for (glm::ivec3 const & offset : kNeighborOffsets) {
+                            glm::ivec3 const fluidCell = solidCell + offset;
+                            if (! fluid.IsInsideGrid(fluidCell)) continue;
+
+                            int const fluidDof = fluid.PressureDofForCell(dofs, fluidCell);
+                            if (fluidDof < 0) continue;
+
+                            int const        dir  = AxisFromOffset(offset);
+                            glm::ivec3 const face = FaceIndexForContact(solidCell, offset);
+                            if (! fluid.IsVelocityFaceInRange(face, dir)) continue;
+
+                            auto const [lowerCell, upperCell] = fluid.FaceNeighborCells(face, dir);
+                            float fluidCoeff = 0.0f;
+                            if (fluidCell == lowerCell) {
+                                fluidCoeff = area;
+                            } else if (fluidCell == upperCell) {
+                                fluidCoeff = -area;
+                            } else {
+                                continue;
+                            }
+
+                            Eigen::Vector3f const axis = ToEigen(fluid.FaceAxis(dir));
+                            Eigen::Vector3f const center = ToEigen(fluid.FaceCenter(face, dir));
+                            Eigen::Vector3f const r = center - body.x;
+
+                            RigidGeneralizedVelocity g = RigidGeneralizedVelocity::Zero();
+                            // 面压力对刚体产生线冲量和角冲量：
+                            // 线冲量方向沿 face 法向，角冲量是 r x 线冲量。
+                            // 负号来自“流体散度约束”和“刚体受到反作用冲量”的符号约定。
+                            g.segment<3>(0) = -fluidCoeff * axis;
+                            g.segment<3>(3) = -fluidCoeff * r.cross(axis);
+
+                            cache.rows.push_back(RigidRowContribution { fluidDof, g });
+                        }
+                    }
+                }
+            }
+
+            if (! cache.rows.empty()) bodyCaches.push_back(std::move(cache));
+        }
+
+        for (BodyProjectionCache const & cache : bodyCaches) {
+            for (RigidRowContribution const & row : cache.rows) {
+                // b 的刚体部分是当前刚体预测速度 V* 穿过接触面的通量：J V*。
+                rhs[row.dof] += row.g.dot(cache.vStar);
+            }
+
+            if (cache.invMass.cwiseAbs().maxCoeff() <= 0.0f) continue;
+
+            for (RigidRowContribution const & a : cache.rows) {
+                RigidGeneralizedVelocity const invMassG = cache.invMass * a.g;
+                for (RigidRowContribution const & b : cache.rows) {
+                    // A 的刚体部分是 J M_s^-1 J^T。
+                    addMatrix(a.dof, b.dof, invMassG.dot(b.g));
+                }
+            }
+        }
+
+        Eigen::SparseMatrix<float> system(numDofs, numDofs);
+        system.setFromTriplets(trips.begin(), trips.end());
+
+        Eigen::ConjugateGradient<
+            Eigen::SparseMatrix<float>,
+            Eigen::Lower | Eigen::Upper,
+            Eigen::DiagonalPreconditioner<float>>
+            solver;
+        // AI建议：矩阵理论上是对称半正定/正定的稀疏系统，先用 Eigen 的 PCG + 对角预条件器。后续如果分辨率提高或条件数变差，可以换成 MICCG/AMG 或矩阵-free PCG。
+        solver.setMaxIterations(200);
+        solver.setTolerance(1e-5f);
+        solver.compute(system);
+        if (solver.info() != Eigen::Success) return false;
+
+        Eigen::VectorXf lambda = solver.solve(rhs);
+        if (solver.info() != Eigen::Success || lambda.size() != numDofs) return false;
+
+        // 用解出的 lambda 回代更新流体 face 速度：u_new = u* - M_f^-1 B_f^T lambda。
+        for (int i = 0; i < fluid.m_iCellX; ++i) {
+            for (int j = 0; j < fluid.m_iCellY; ++j) {
+                for (int k = 0; k < fluid.m_iCellZ; ++k) {
+                    glm::ivec3 const face(i, j, k);
+                    for (int dir = 0; dir < 3; ++dir) {
+                        if (! fluid.IsVelocityFaceInRange(face, dir)) continue;
+
+                        auto const [lowerCell, upperCell] = fluid.FaceNeighborCells(face, dir);
+                        int const lowerDof = fluid.PressureDofForCell(dofs, lowerCell);
+                        int const upperDof = fluid.PressureDofForCell(dofs, upperCell);
+                        if (lowerDof < 0 && upperDof < 0) continue;
+
+                        float const lambdaLower = lowerDof >= 0 ? lambda[lowerDof] : 0.0f;
+                        float const lambdaUpper = upperDof >= 0 ? lambda[upperDof] : 0.0f;
+                        float const impulse     = area * (lambdaLower - lambdaUpper);
+
+                        int const faceId = fluid.GridIndex(face);
+                        fluid.m_vel[faceId][dir] = uStar[faceId][dir] - invMass * impulse;
+                    }
+                }
+            }
+        }
+
+        // 同一个 lambda 也要更新刚体广义速度：V_new = V* - M_s^-1 J^T lambda。
+        for (BodyProjectionCache const & cache : bodyCaches) {
+            if (cache.bodyId < 0 || cache.bodyId >= static_cast<int>(rigid.Bodies.size())) continue;
+            if (rigid.Bodies[cache.bodyId].isStatic) continue;
+
+            RigidGeneralizedVelocity impulse = RigidGeneralizedVelocity::Zero();
+            for (RigidRowContribution const & row : cache.rows) {
+                impulse += row.g * lambda[row.dof];
+            }
+
+            rigid.SetGeneralizedVelocity(cache.bodyId, cache.vStar - cache.invMass * impulse);
+        }
+
+        // m_p 仍然保存压力用于可视化接口；lambda 是压力冲量，所以除以 dt 近似得到压力。
+        std::fill(fluid.m_p.begin(), fluid.m_p.end(), 0.0f);
+        for (int dof = 0; dof < numDofs; ++dof) {
+            fluid.m_p[fluid.GridIndex(dofs.dofCell[dof])] = lambda[dof] / dt;
+        }
+
+        return true;
+    }
 
     void FluidSolidCoupler::ResetDebug() {
         _projectedParticleCount = 0;
@@ -219,7 +452,7 @@ namespace VCX::MainScene {
 
                             int const         dir        = AxisFromOffset(offset);
                             glm::ivec3 const  face       = FaceIndexForContact(solidCell, offset);
-                            Eigen::Vector3f const center = FaceCenter(fluid, face, dir);
+                            Eigen::Vector3f const center = ToEigen(fluid.FaceCenter(face, dir));
                             Eigen::Vector3f const vel    = rigid.VelocityAtPoint(bodyId, center);
 
                             fluid.SetSolidBoundaryVelocity(face, dir, vel[dir]);

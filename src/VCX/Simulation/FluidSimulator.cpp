@@ -1052,6 +1052,72 @@ namespace VCX::MainScene {
         return m_solidVel[index2GridOffset(glm::ivec3(i, j, k))][dir];
     }
 
+    bool FluidSimulator::IsVelocityFaceInRange(glm::ivec3 face, int dir) const {
+        // 复用原来的 MAC face 有效性判断,为Coupler提供一个接口
+        return isVelocityFaceInRange(face.x, face.y, face.z, dir);
+    }
+
+    std::pair<glm::ivec3, glm::ivec3> FluidSimulator::FaceNeighborCells(glm::ivec3 face, int dir) const {
+        // 速度面 face 位于 lower 和 upper 两个压力 cell 中间。
+        glm::ivec3 lower = face;
+        lower[dir] -= 1;
+        return { lower, face };
+    }
+
+    glm::vec3 FluidSimulator::FaceCenter(glm::ivec3 face, int dir) const {
+        // MAC 网格中，dir 方向速度存在该方向的 cell 边界上，
+        // 另外两个方向则位于半格偏移处。
+        glm::vec3 pos(float(face.x), float(face.y), float(face.z));
+        if (dir != 0) pos.x += 0.5f;
+        if (dir != 1) pos.y += 0.5f;
+        if (dir != 2) pos.z += 0.5f;
+        return pos * m_h + glm::vec3(-0.5f);
+    }
+
+    glm::vec3 FluidSimulator::FaceAxis(int dir) const {
+        glm::vec3 axis(0.0f);
+        if (dir >= 0 && dir < 3) axis[dir] = 1.0f;
+        return axis;
+    }
+
+    float FluidSimulator::FaceVelocity(std::vector<glm::vec3> const & velocities, glm::ivec3 face, int dir) const {
+        if (dir < 0 || dir >= 3 || ! IsVelocityFaceInRange(face, dir)) return 0.0f;
+        int const id = index2GridOffset(face);
+        if (id < 0 || id >= static_cast<int>(velocities.size())) return 0.0f;
+        return velocities[id][dir];
+    }
+
+    FluidPressureDofs FluidSimulator::BuildPressureDofs() const {
+        // Ax=b 的未知量个数不是总 cell 数，而是当前被粒子标记为 FLUID_CELL 的数量。
+        // 空气和固体没有压力未知量，所以它们在 pressureDof 中保持 -1。
+        FluidPressureDofs result;
+        result.pressureDof.assign(m_iNumCells, -1);
+
+        if (m_type.empty()) return result;
+
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    glm::ivec3 const cell(i, j, k);
+                    int const        id = index2GridOffset(cell);
+                    if (m_type[id] != FLUID_CELL) continue;
+
+                    result.pressureDof[id] = static_cast<int>(result.dofCell.size());
+                    result.dofCell.push_back(cell);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    int FluidSimulator::PressureDofForCell(FluidPressureDofs const & dofs, glm::ivec3 cell) const {
+        if (! IsInsideGrid(cell)) return -1;
+        int const id = index2GridOffset(cell);
+        if (id < 0 || id >= static_cast<int>(dofs.pressureDof.size())) return -1;
+        return dofs.pressureDof[id];
+    }
+
     bool FluidSimulator::IsCellSolid(glm::ivec3 idx) const {
         if (IsInsideGrid(idx)) {
             return m_s[index2GridOffset(idx)] <= 0.5f;

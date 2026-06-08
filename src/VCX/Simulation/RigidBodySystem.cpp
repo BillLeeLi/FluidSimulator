@@ -758,6 +758,41 @@ namespace VCX::MainScene {
         return b.v + b.w.cross(worldPoint - b.x);
     }
 
+    RigidGeneralizedVelocity RigidBodySystem::GetGeneralizedVelocity(int id) const {
+        // 变分耦合把刚体看成一个 6 自由度速度变量：[v_x v_y v_z w_x w_y w_z]^T。
+        RigidGeneralizedVelocity velocity = RigidGeneralizedVelocity::Zero();
+        if (! IsValidBody(id)) return velocity;
+
+        auto const & body = Bodies[id];
+        velocity.segment<3>(0) = body.v;
+        velocity.segment<3>(3) = body.w;
+        return velocity;
+    }
+
+    void RigidBodySystem::SetGeneralizedVelocity(int id, RigidGeneralizedVelocity const & velocity) {
+        // 求解器得到新的广义速度后写回刚体；静态物体不可被压力冲量推动。
+        if (! IsValidBody(id)) return;
+
+        auto & body = Bodies[id];
+        if (body.isStatic) return;
+        body.v = velocity.segment<3>(0);
+        body.w = velocity.segment<3>(3);
+    }
+
+    RigidInverseMassBlock RigidBodySystem::GetInverseMassBlock(int id) const {
+        // 上半块是平动逆质量，下半块是世界坐标下的转动惯量逆。
+        // 没有平动-转动耦合项，所以当前是块对角矩阵。
+        RigidInverseMassBlock invMass = RigidInverseMassBlock::Zero();
+        if (! IsValidBody(id)) return invMass;
+
+        auto const & body = Bodies[id];
+        if (body.isStatic) return invMass;
+
+        invMass.block<3, 3>(0, 0) = body.invMass * Eigen::Matrix3f::Identity();
+        invMass.block<3, 3>(3, 3) = body.GetWorldInertiaInv();
+        return invMass;
+    }
+
 
     void RigidBodySystem::CollectSurfaceSamples(int bodyId, int samplesPerAxis, std::vector<RigidSurfaceSample> & samples) const {
         // 这里只采样几何表面，不碰流体；压力、浮力怎么用由 coupler 那边决定。

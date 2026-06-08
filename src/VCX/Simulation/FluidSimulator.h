@@ -2,6 +2,7 @@
 
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace VCX::MainScene {
@@ -24,6 +25,14 @@ namespace VCX::MainScene {
         bool  separateParticles = true;  // 是否启用粒子分离
         float overRelaxation    = 1.9f;  // 超松弛因子
         bool  compensateDrift   = false; // 是否补偿漂移
+    };
+
+    // 两张映射表：
+    // pressureDof: 从网格 cellId 找到它在 Ax=b 里的未知量编号；不是流体则为 -1。
+    // dofCell:     从未知量编号反查对应的三维 cell 坐标，解完以后把压力写回 m_p。
+    struct FluidPressureDofs {
+        std::vector<int>        pressureDof; // cellId -> pressure dof, -1表示不是压力未知量
+        std::vector<glm::ivec3> dofCell;     // pressure dof -> cell index
     };
 
     struct FluidSimulator {
@@ -165,6 +174,22 @@ namespace VCX::MainScene {
         void SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity);
         bool HasSolidBoundaryVelocity(int i, int j, int k, int dir) const;
         float SolidBoundaryVelocity(int i, int j, int k, int dir) const;
+
+        // 变分投影/矩阵压力求解会用到的 MAC face 和 pressure dof 辅助接口。
+        // 这些接口把网格内部实现暴露成更清晰的“离散算子”：face 两侧 cell、face 中心、face 法向等。
+        bool IsVelocityFaceInRange(glm::ivec3 face, int dir) const;
+        // 返回某个 MAC 速度面两侧的 cell：lower 是负方向侧，upper 是正方向侧。
+        std::pair<glm::ivec3, glm::ivec3> FaceNeighborCells(glm::ivec3 face, int dir) const;
+        // 返回 MAC face 的世界坐标中心，用于计算刚体接触点速度 v + w x r。
+        glm::vec3 FaceCenter(glm::ivec3 face, int dir) const;
+        // 返回 face 法向轴：dir=0/1/2 分别对应 x/y/z 方向。
+        glm::vec3 FaceAxis(int dir) const;
+        // 从给定速度场读取某个 face 的法向速度分量，常用于读取投影前速度 u*。
+        float FaceVelocity(std::vector<glm::vec3> const & velocities, glm::ivec3 face, int dir) const;
+        // 为所有流体 cell 分配压力未知量编号。
+        FluidPressureDofs BuildPressureDofs() const;
+        // 查询 cell 对应的压力未知量编号；非流体/越界返回 -1。
+        int PressureDofForCell(FluidPressureDofs const & dofs, glm::ivec3 cell) const;
 
         // 查看Cell类型，用于调试和边界判断
         // 网格外视为固体
