@@ -16,7 +16,7 @@ namespace VCX::MainScene {
         bool  enableMovingSolidVelocity { true };
         bool  enableParticleCollisionImpulse { true };
         bool  enableBoatBuoyancy { false };
-        bool  enableVariationalProjection { false };
+        bool  enableVariationalProjection { true  };
         float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
         float particleImpulseScale { 0.5f };

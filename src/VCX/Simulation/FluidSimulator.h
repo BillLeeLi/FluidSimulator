@@ -104,6 +104,13 @@ namespace VCX::MainScene {
         int   m_renderSurfaceUpdateInterval  = 2;
         int   m_renderSurfaceFrameCounter    = 0;
 
+        // Offline render surface reconstruction mode.
+        // density mode: smooth color-field / metaball-like surface.
+        // sdf mode: union-of-particles signed distance, closer to FluidRigidCoupling3D.
+        bool  m_renderSurfaceUseParticleSdf  = false;
+        float m_renderSurfaceSdfParticleRadius = 0.0f; // 0 => default multiple of m_particleRadius
+        int   m_renderSurfaceSdfSmoothIters   = 1;    // render-only smoothing for particle SDF; not used by the solver
+
         std::vector<float> m_renderSurfaceColor;
         std::vector<float> m_renderSurfacePhi;
         std::vector<glm::vec3> m_renderSurfaceNormal;

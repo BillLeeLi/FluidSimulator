@@ -1309,159 +1309,295 @@ namespace VCX::MainScene {
         };
 
         std::fill(m_renderSurfaceColor.begin(), m_renderSurfaceColor.end(), 0.0f);
-        std::vector<unsigned char> activePoint(renderCellCount, 0); // 记录实际参与表面建模的格点，后续进行模糊时不需要遍历全部格点
+        std::vector<unsigned char> activePoint(renderCellCount, 0); // 记录参与表面建模的格点
+        std::vector<unsigned char> activeWork(renderCellCount, 0);
 
-        float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 1.8f * m_h;
-        float const invR   = 1.0f / radius;
-        int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_renderSurfaceInvH)));
+        // 两种离线表面重建模式：
+        // 1) density：原来的核密度标量场，画面连续但容易过度圆润，像果冻/软胶。
+        // 2) sdf：每个粒子作为一个小球，取 min(||x-xp||-r)，更接近 FluidRigidCoupling3D 的 SDF 导出方法。
+        if (m_renderSurfaceUseParticleSdf) {
+            float const sdfRadius = (m_renderSurfaceSdfParticleRadius > 0.0f)
+                ? m_renderSurfaceSdfParticleRadius
+                : 1.55f * m_particleRadius;
+            float const farPhi = std::max(4.0f * sdfRadius, 4.0f * m_renderSurfaceH);
+            float const activeBand = std::max(2.5f * m_renderSurfaceH, 0.75f * sdfRadius);
+            int const reach = std::max(1, static_cast<int>(std::ceil((sdfRadius + activeBand) * m_renderSurfaceInvH)));
 
-        // 核函数
-        auto kernel = [&](float r) {
-            float const q = r * invR;
-            if (q >= 1.0f) return 0.0f;
-            float const s = 1.0f - q * q;
-            return s * s * s;
-        };
+            std::fill(m_renderSurfacePhi.begin(), m_renderSurfacePhi.end(), farPhi);
 
-        std::vector<float> restSamples;
-        restSamples.reserve(static_cast<std::size_t>(m_iNumSpheres));
+            for (glm::vec3 const & particlePos : m_particlePos) {
+                glm::vec3 const grid = (particlePos + glm::vec3(0.5f)) * m_renderSurfaceInvH;
+                int const       i0   = clampCoord(static_cast<int>(std::floor(grid.x)) - reach, 0, m_renderSurfaceCellX - 1);
+                int const       j0   = clampCoord(static_cast<int>(std::floor(grid.y)) - reach, 0, m_renderSurfaceCellY - 1);
+                int const       k0   = clampCoord(static_cast<int>(std::floor(grid.z)) - reach, 0, m_renderSurfaceCellZ - 1);
+                int const       i1   = clampCoord(static_cast<int>(std::floor(grid.x)) + reach, 0, m_renderSurfaceCellX - 1);
+                int const       j1   = clampCoord(static_cast<int>(std::floor(grid.y)) + reach, 0, m_renderSurfaceCellY - 1);
+                int const       k1   = clampCoord(static_cast<int>(std::floor(grid.z)) + reach, 0, m_renderSurfaceCellZ - 1);
 
-        // 对每个粒子的近邻格子计算核函数累加到color上
-        // 计算复杂度和粒子数成正比，而和场景大小无关
-        for (glm::vec3 const & particlePos : m_particlePos) {
-            glm::vec3 const grid = (particlePos + glm::vec3(0.5f)) * m_renderSurfaceInvH;
-            int const       i0   = clampCoord(static_cast<int>(std::floor(grid.x)) - reach, 0, m_renderSurfaceCellX - 1);
-            int const       j0   = clampCoord(static_cast<int>(std::floor(grid.y)) - reach, 0, m_renderSurfaceCellY - 1);
-            int const       k0   = clampCoord(static_cast<int>(std::floor(grid.z)) - reach, 0, m_renderSurfaceCellZ - 1);
-            int const       i1   = clampCoord(static_cast<int>(std::floor(grid.x)) + reach, 0, m_renderSurfaceCellX - 1);
-            int const       j1   = clampCoord(static_cast<int>(std::floor(grid.y)) + reach, 0, m_renderSurfaceCellY - 1);
-            int const       k1   = clampCoord(static_cast<int>(std::floor(grid.z)) + reach, 0, m_renderSurfaceCellZ - 1);
-
-            for (int i = i0; i <= i1; ++i) {
-                for (int j = j0; j <= j1; ++j) {
-                    for (int k = k0; k <= k1; ++k) {
-                        glm::vec3 const p = renderPosition(i, j, k);
-                        float const     w = kernel(glm::length(p - particlePos));
-                        if (w <= 0.0f) continue;
-
-                        int const id = renderIndex(i, j, k);
-                        m_renderSurfaceColor[id] += w;
-                        activePoint[id] = 1;
+                for (int i = i0; i <= i1; ++i) {
+                    for (int j = j0; j <= j1; ++j) {
+                        for (int k = k0; k <= k1; ++k) {
+                            glm::vec3 const p = renderPosition(i, j, k);
+                            float const phi = glm::length(p - particlePos) - sdfRadius;
+                            if (phi >= m_renderSurfacePhi[renderIndex(i, j, k)] && std::abs(phi) > activeBand)
+                                continue;
+                            int const id = renderIndex(i, j, k);
+                            if (phi < m_renderSurfacePhi[id])
+                                m_renderSurfacePhi[id] = phi;
+                            if (phi <= activeBand)
+                                activePoint[id] = 1;
+                        }
                     }
                 }
             }
-        }
 
-        for (int id = 0; id < renderCellCount; ++id) {
-            float const value = m_renderSurfaceColor[id];
-            if (value > 1e-6f) restSamples.push_back(value);
-        }
-
-        // percentile找到80%分位数作为restField
-        float restField = 1.0f;
-        if (! restSamples.empty()) {
-            std::size_t const percentileIndex = std::min(
-                restSamples.size() - 1,
-                static_cast<std::size_t>(0.80f * float(restSamples.size() - 1)));
-            std::nth_element(restSamples.begin(), restSamples.begin() + percentileIndex, restSamples.end());
-            restField = std::max(restSamples[percentileIndex], 1e-6f);
-        }
-        for (float & value : m_renderSurfaceColor)
-            value = glm::clamp(value / restField, 0.0f, 1.5f);
-
-        // 先将参与建模的格点扩展到邻域内，避免模糊时遗漏边界点导致表面破洞
-        int const                  blurIters  = std::max(0, m_renderSurfaceBlurIters);
-        std::vector<unsigned char> activeWork = activePoint;
-        for (int expand = 0; expand < blurIters + 1; ++expand) {
-            std::vector<unsigned char> expanded = activeWork;
-            for (int i = 0; i < m_renderSurfaceCellX; ++i) {
-                for (int j = 0; j < m_renderSurfaceCellY; ++j) {
-                    for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
-                        int const id = renderIndex(i, j, k);
-                        if (! activeWork[id]) continue;
-                        for (int di = -1; di <= 1; ++di) {
-                            int const ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
-                            for (int dj = -1; dj <= 1; ++dj) {
-                                int const nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
-                                for (int dk = -1; dk <= 1; ++dk) {
-                                    int const nk                      = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
-                                    expanded[renderIndex(ni, nj, nk)] = 1;
+            // 只扩展一小圈 active band，Marching Tetrahedra 只遍历界面附近，避免整场景误出面。
+            activeWork = activePoint;
+            for (int expand = 0; expand < 2; ++expand) {
+                std::vector<unsigned char> expanded = activeWork;
+                for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                    for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                        for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                            int const id = renderIndex(i, j, k);
+                            if (! activeWork[id]) continue;
+                            for (int di = -1; di <= 1; ++di) {
+                                int const ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                                for (int dj = -1; dj <= 1; ++dj) {
+                                    int const nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                    for (int dk = -1; dk <= 1; ++dk) {
+                                        int const nk = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                        expanded[renderIndex(ni, nj, nk)] = 1;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                activeWork.swap(expanded);
             }
-            activeWork.swap(expanded);
-        }
 
-        // 模糊处理
-        std::vector<float> scratch(renderCellCount, 0.0f);
-        for (int iter = 0; iter < blurIters; ++iter) {
-            for (int i = 0; i < m_renderSurfaceCellX; ++i) {
-                for (int j = 0; j < m_renderSurfaceCellY; ++j) {
-                    for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
-                        int const id = renderIndex(i, j, k);
-                        if (! activeWork[id]) {
-                            scratch[id] = 0.0f;
-                            continue;
+            // 直接 union-of-particles SDF 会保留每个粒子的球形颗粒感。
+            // 这里做少量窄带平滑，只用于离线渲染，不参与压力投影/耦合求解。
+            // 目的不是把水变成软胶，而是补掉粒子间的小洞并让法线更连续。
+            int const sdfSmoothIters = std::max(0, m_renderSurfaceSdfSmoothIters);
+            std::vector<float> scratch(renderCellCount, farPhi);
+            for (int iter = 0; iter < sdfSmoothIters; ++iter) {
+                for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                    for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                        for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                            int const id = renderIndex(i, j, k);
+                            if (! activeWork[id]) {
+                                scratch[id] = m_renderSurfacePhi[id];
+                                continue;
+                            }
+
+                            float accum = 4.0f * m_renderSurfacePhi[id];
+                            float wsum  = 4.0f;
+                            for (int di = -1; di <= 1; ++di) {
+                                int const ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                                for (int dj = -1; dj <= 1; ++dj) {
+                                    int const nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                    for (int dk = -1; dk <= 1; ++dk) {
+                                        if (di == 0 && dj == 0 && dk == 0) continue;
+                                        int const nk  = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                        int const nid = renderIndex(ni, nj, nk);
+                                        if (! activeWork[nid]) continue;
+                                        int const manhattan = std::abs(di) + std::abs(dj) + std::abs(dk);
+                                        float const w = (manhattan == 1) ? 2.0f : 1.0f;
+                                        accum += w * m_renderSurfacePhi[nid];
+                                        wsum += w;
+                                    }
+                                }
+                            }
+                            scratch[id] = accum / std::max(wsum, 1e-6f);
                         }
-                        float accum = 0.0f;
-                        float wsum  = 0.0f;
+                    }
+                }
+                m_renderSurfacePhi.swap(scratch);
+            }
+
+            // SDF 模式的小洞修补：如果一个窄带格点被足够多内部邻居包围，
+            // 说明它多半是粒子采样造成的孔洞，而不是真正的空气区域。
+            std::vector<float> closedPhi = m_renderSurfacePhi;
+            float const closeInsidePhi = -0.20f * m_renderSurfaceH;
+            for (int i = 1; i < m_renderSurfaceCellX - 1; ++i) {
+                for (int j = 1; j < m_renderSurfaceCellY - 1; ++j) {
+                    for (int k = 1; k < m_renderSurfaceCellZ - 1; ++k) {
+                        int const id = renderIndex(i, j, k);
+                        if (! activeWork[id] || m_renderSurfacePhi[id] < 0.0f) continue;
+
+                        int activeNeighbors = 0;
+                        int insideNeighbors = 0;
                         for (int di = -1; di <= 1; ++di) {
-                            int const   ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
-                            float const wi = (di == 0) ? 2.0f : 1.0f;
                             for (int dj = -1; dj <= 1; ++dj) {
-                                int const   nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
-                                float const wj = (dj == 0) ? 2.0f : 1.0f;
                                 for (int dk = -1; dk <= 1; ++dk) {
-                                    int const   nk = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
-                                    float const wk = (dk == 0) ? 2.0f : 1.0f;
-                                    float const w  = wi * wj * wk;
-                                    accum += w * m_renderSurfaceColor[renderIndex(ni, nj, nk)];
-                                    wsum += w;
+                                    if (di == 0 && dj == 0 && dk == 0) continue;
+                                    int const nid = renderIndex(i + di, j + dj, k + dk);
+                                    if (! activeWork[nid]) continue;
+                                    ++activeNeighbors;
+                                    if (m_renderSurfacePhi[nid] < 0.0f) ++insideNeighbors;
                                 }
                             }
                         }
-                        scratch[id] = accum / std::max(wsum, 1e-6f);
+                        if (activeNeighbors >= 18 && insideNeighbors >= 14)
+                            closedPhi[id] = closeInsidePhi;
                     }
                 }
             }
-            m_renderSurfaceColor.swap(scratch);
-        }
+            m_renderSurfacePhi.swap(closedPhi);
+        } else {
+            float const radius = (m_renderSurfaceKernelRadius > 0.0f) ? m_renderSurfaceKernelRadius : 1.8f * m_h;
+            float const invR   = 1.0f / radius;
+            int const   reach  = std::max(1, static_cast<int>(std::ceil(radius * m_renderSurfaceInvH)));
 
-        for (int id = 0; id < renderCellCount; ++id)
-            m_renderSurfacePhi[id] = m_renderSurfaceIsoValue - m_renderSurfaceColor[id];
+            // 核函数
+            auto kernel = [&](float r) {
+                float const q = r * invR;
+                if (q >= 1.0f) return 0.0f;
+                float const s = 1.0f - q * q;
+                return s * s * s;
+            };
 
-        // 修补表面渲染中出现的破洞：如果一个格点的active邻居数和inside邻居数都超过一定阈值，则认为该格点也在内部
-        std::vector<float> filledPhi = m_renderSurfacePhi;
-        float const fillInsidePhi = -0.25f * m_renderSurfaceH;
-        for (int i = 1; i < m_renderSurfaceCellX - 1; ++i) {
-            for (int j = 1; j < m_renderSurfaceCellY - 1; ++j) {
-                for (int k = 1; k < m_renderSurfaceCellZ - 1; ++k) {
-                    int const id = renderIndex(i, j, k);
-                    if (! activeWork[id] || m_renderSurfacePhi[id] < 0.0f) continue;
+            std::vector<float> restSamples;
+            restSamples.reserve(static_cast<std::size_t>(m_iNumSpheres));
 
-                    int insideNeighbors = 0;
-                    int activeNeighbors = 0;
-                    for (int di = -1; di <= 1; ++di) {
-                        for (int dj = -1; dj <= 1; ++dj) {
-                            for (int dk = -1; dk <= 1; ++dk) {
-                                if (di == 0 && dj == 0 && dk == 0) continue;
-                                int const nid = renderIndex(i + di, j + dj, k + dk);
-                                if (! activeWork[nid]) continue;
-                                ++activeNeighbors;
-                                if (m_renderSurfacePhi[nid] < 0.0f) ++insideNeighbors;
+            // 对每个粒子的近邻格子计算核函数累加到color上
+            // 计算复杂度和粒子数成正比，而和场景大小无关
+            for (glm::vec3 const & particlePos : m_particlePos) {
+                glm::vec3 const grid = (particlePos + glm::vec3(0.5f)) * m_renderSurfaceInvH;
+                int const       i0   = clampCoord(static_cast<int>(std::floor(grid.x)) - reach, 0, m_renderSurfaceCellX - 1);
+                int const       j0   = clampCoord(static_cast<int>(std::floor(grid.y)) - reach, 0, m_renderSurfaceCellY - 1);
+                int const       k0   = clampCoord(static_cast<int>(std::floor(grid.z)) - reach, 0, m_renderSurfaceCellZ - 1);
+                int const       i1   = clampCoord(static_cast<int>(std::floor(grid.x)) + reach, 0, m_renderSurfaceCellX - 1);
+                int const       j1   = clampCoord(static_cast<int>(std::floor(grid.y)) + reach, 0, m_renderSurfaceCellY - 1);
+                int const       k1   = clampCoord(static_cast<int>(std::floor(grid.z)) + reach, 0, m_renderSurfaceCellZ - 1);
+
+                for (int i = i0; i <= i1; ++i) {
+                    for (int j = j0; j <= j1; ++j) {
+                        for (int k = k0; k <= k1; ++k) {
+                            glm::vec3 const p = renderPosition(i, j, k);
+                            float const     w = kernel(glm::length(p - particlePos));
+                            if (w <= 0.0f) continue;
+
+                            int const id = renderIndex(i, j, k);
+                            m_renderSurfaceColor[id] += w;
+                            activePoint[id] = 1;
+                        }
+                    }
+                }
+            }
+
+            for (int id = 0; id < renderCellCount; ++id) {
+                float const value = m_renderSurfaceColor[id];
+                if (value > 1e-6f) restSamples.push_back(value);
+            }
+
+            // percentile找到80%分位数作为restField
+            float restField = 1.0f;
+            if (! restSamples.empty()) {
+                std::size_t const percentileIndex = std::min(
+                    restSamples.size() - 1,
+                    static_cast<std::size_t>(0.80f * float(restSamples.size() - 1)));
+                std::nth_element(restSamples.begin(), restSamples.begin() + percentileIndex, restSamples.end());
+                restField = std::max(restSamples[percentileIndex], 1e-6f);
+            }
+            for (float & value : m_renderSurfaceColor)
+                value = glm::clamp(value / restField, 0.0f, 1.5f);
+
+            // 先将参与建模的格点扩展到邻域内，避免模糊时遗漏边界点导致表面破洞
+            int const blurIters = std::max(0, m_renderSurfaceBlurIters);
+            activeWork = activePoint;
+            for (int expand = 0; expand < blurIters + 1; ++expand) {
+                std::vector<unsigned char> expanded = activeWork;
+                for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                    for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                        for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                            int const id = renderIndex(i, j, k);
+                            if (! activeWork[id]) continue;
+                            for (int di = -1; di <= 1; ++di) {
+                                int const ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                                for (int dj = -1; dj <= 1; ++dj) {
+                                    int const nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                    for (int dk = -1; dk <= 1; ++dk) {
+                                        int const nk = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                        expanded[renderIndex(ni, nj, nk)] = 1;
+                                    }
+                                }
                             }
                         }
                     }
+                }
+                activeWork.swap(expanded);
+            }
 
-                    if (activeNeighbors >= 18 && insideNeighbors >= 18)
-                        filledPhi[id] = fillInsidePhi;
+            // 模糊处理
+            std::vector<float> scratch(renderCellCount, 0.0f);
+            for (int iter = 0; iter < blurIters; ++iter) {
+                for (int i = 0; i < m_renderSurfaceCellX; ++i) {
+                    for (int j = 0; j < m_renderSurfaceCellY; ++j) {
+                        for (int k = 0; k < m_renderSurfaceCellZ; ++k) {
+                            int const id = renderIndex(i, j, k);
+                            if (! activeWork[id]) {
+                                scratch[id] = 0.0f;
+                                continue;
+                            }
+                            float accum = 0.0f;
+                            float wsum  = 0.0f;
+                            for (int di = -1; di <= 1; ++di) {
+                                int const   ni = clampCoord(i + di, 0, m_renderSurfaceCellX - 1);
+                                float const wi = (di == 0) ? 2.0f : 1.0f;
+                                for (int dj = -1; dj <= 1; ++dj) {
+                                    int const   nj = clampCoord(j + dj, 0, m_renderSurfaceCellY - 1);
+                                    float const wj = (dj == 0) ? 2.0f : 1.0f;
+                                    for (int dk = -1; dk <= 1; ++dk) {
+                                        int const   nk = clampCoord(k + dk, 0, m_renderSurfaceCellZ - 1);
+                                        float const wk = (dk == 0) ? 2.0f : 1.0f;
+                                        float const w  = wi * wj * wk;
+                                        accum += w * m_renderSurfaceColor[renderIndex(ni, nj, nk)];
+                                        wsum += w;
+                                    }
+                                }
+                            }
+                            scratch[id] = accum / std::max(wsum, 1e-6f);
+                        }
+                    }
+                }
+                m_renderSurfaceColor.swap(scratch);
+            }
+
+            for (int id = 0; id < renderCellCount; ++id)
+                m_renderSurfacePhi[id] = m_renderSurfaceIsoValue - m_renderSurfaceColor[id];
+
+            // 修补表面渲染中出现的破洞：如果一个格点的active邻居数和inside邻居数都超过一定阈值，则认为该格点也在内部
+            std::vector<float> filledPhi = m_renderSurfacePhi;
+            float const fillInsidePhi = -0.25f * m_renderSurfaceH;
+            for (int i = 1; i < m_renderSurfaceCellX - 1; ++i) {
+                for (int j = 1; j < m_renderSurfaceCellY - 1; ++j) {
+                    for (int k = 1; k < m_renderSurfaceCellZ - 1; ++k) {
+                        int const id = renderIndex(i, j, k);
+                        if (! activeWork[id] || m_renderSurfacePhi[id] < 0.0f) continue;
+
+                        int insideNeighbors = 0;
+                        int activeNeighbors = 0;
+                        for (int di = -1; di <= 1; ++di) {
+                            for (int dj = -1; dj <= 1; ++dj) {
+                                for (int dk = -1; dk <= 1; ++dk) {
+                                    if (di == 0 && dj == 0 && dk == 0) continue;
+                                    int const nid = renderIndex(i + di, j + dj, k + dk);
+                                    if (! activeWork[nid]) continue;
+                                    ++activeNeighbors;
+                                    if (m_renderSurfacePhi[nid] < 0.0f) ++insideNeighbors;
+                                }
+                            }
+                        }
+
+                        if (activeNeighbors >= 18 && insideNeighbors >= 18)
+                            filledPhi[id] = fillInsidePhi;
+                    }
                 }
             }
+            m_renderSurfacePhi.swap(filledPhi);
         }
-        m_renderSurfacePhi.swap(filledPhi);
 
         auto samplePhi = [&](int i, int j, int k) {
             return m_renderSurfacePhi[renderIndex(
