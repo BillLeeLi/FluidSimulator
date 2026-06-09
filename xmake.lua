@@ -108,3 +108,18 @@ target("simulation")
     if is_plat("windows") then
         add_cxflags("/EHsc")
     end
+
+target("offline-export")
+    set_kind("binary")
+    add_packages("glm")
+    add_packages("eigen")
+    add_packages("fcl")
+    add_includedirs("src/VCX", { public = true })
+    add_files("src/VCX/OfflineExport/main.cpp")
+    add_files("src/VCX/Simulation/FluidSimulator.cpp")
+    add_files("src/VCX/Simulation/FluidSolidCoupler.cpp")
+    add_files("src/VCX/Simulation/RigidBodySystem.cpp")
+    add_files("src/VCX/Simulation/SimulationWorld.cpp")
+    if is_plat("windows") then
+        add_cxflags("/EHsc")
+    end
