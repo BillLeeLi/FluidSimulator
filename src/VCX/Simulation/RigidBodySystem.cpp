@@ -616,7 +616,7 @@ namespace VCX::MainScene {
             boat.q           = Eigen::Quaternionf::Identity();
             boat.v           = Eigen::Vector3f(0.015f, 0.0f, 0.006f);
             boat.w           = Eigen::Vector3f::Zero();
-            boat.mass        = 0.55f;
+            boat.mass        = 1.10f;
             boat.restitution = 0.02f;
             boat.friction    = 0.82f;
             boat.useGravity  = true;
@@ -675,14 +675,14 @@ namespace VCX::MainScene {
             AddBody(sphere);
 
             RigidBody obstacle;
-            obstacle.name        = "static_coupling_box";
+            obstacle.name        = "dynamic_coupling_box";
             obstacle.shape       = RigidBodyShape::Box;
             obstacle.dim         = Eigen::Vector3f(0.12f, 0.12f, 0.20f);
             obstacle.x           = Eigen::Vector3f(0.20f, -0.18f, -0.08f);
             obstacle.q           = Eigen::Quaternionf(Eigen::AngleAxisf(-0.35f, Eigen::Vector3f::UnitY()));
             obstacle.mass        = 1.0f;
-            obstacle.isStatic    = true;
-            obstacle.useGravity  = false;
+            obstacle.isStatic    = false;
+            obstacle.useGravity  = true;
             obstacle.restitution = 0.05f;
             obstacle.friction    = 0.80f;
             obstacle.color       = Eigen::Vector3f(0.50f, 0.85f, 0.62f);

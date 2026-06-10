@@ -16,8 +16,12 @@ namespace VCX::MainScene {
         bool  enableMovingSolidVelocity { true };
         bool  enableParticleCollisionImpulse { true };
         bool  enableBoatBuoyancy { false };
+<<<<<<< HEAD
         bool  enableVariationalProjection { true  };
         float fluidDensity        { 150.0f };
+=======
+        bool  enableVariationalProjection { false };
+>>>>>>> 5a8eb57 (增加了流体和玻璃的边界判断，以及部分小参数的改动)
         float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
         float particleImpulseScale { 0.5f };

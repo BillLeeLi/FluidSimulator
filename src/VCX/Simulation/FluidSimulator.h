@@ -182,6 +182,12 @@ namespace VCX::MainScene {
         bool HasSolidBoundaryVelocity(int i, int j, int k, int dir) const;
         float SolidBoundaryVelocity(int i, int j, int k, int dir) const;
 
+        // 判断某个 MAC 速度面是否是固体/玻璃边界面，并把所有这类面的速度强制设为边界速度。
+        // 这一步很重要：否则 P2G 会把粒子速度写到墙面 face 上，压力投影虽然在散度里把墙当成 0 通量，
+        // 但 G2P 仍可能把未投影的墙面速度采回粒子，导致玻璃边缘附近持续抖动/自发流动。
+        bool IsVelocityFaceSolidBoundary(glm::ivec3 face, int dir) const;
+        void EnforceSolidBoundaryVelocities();
+
         // 变分投影/矩阵压力求解会用到的 MAC face 和 pressure dof 辅助接口。
         // 这些接口把网格内部实现暴露成更清晰的“离散算子”：face 两侧 cell、face 中心、face 法向等。
         bool IsVelocityFaceInRange(glm::ivec3 face, int dir) const;

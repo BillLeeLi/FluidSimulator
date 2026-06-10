@@ -75,7 +75,18 @@ namespace VCX::MainScene {
 
     bool FluidSimulator::isValidVelocity(int i, int j, int k, int dir) const {
         if (! isVelocityFaceInRange(i, j, k, dir)) return false;
-        return m_s[index2GridOffset(glm::ivec3(i, j, k))] > 0.5f;
+
+        // MAC face 代表两个 pressure cell 之间的通量。只检查 face 自己所在的 cell 会漏掉一半墙面：
+        // 例如负 x 玻璃壁的边界 face 索引是 i=1，m_s(1,j,k) 是流体，于是旧代码会把它当成普通流体 face。
+        // 这些未被压力投影真正修正的墙面速度之后又被 G2P 采回粒子，是玻璃边缘持续抖动的主要来源。
+        // 因此普通流体速度 face 必须要求两侧 cell 都不是固体；固体边界 face 由
+        // EnforceSolidBoundaryVelocities()/SolidBoundaryVelocity 单独处理。
+        glm::ivec3 const face(i, j, k);
+        auto const [lower, upper] = FaceNeighborCells(face, dir);
+        if (! IsInsideGrid(lower) || ! IsInsideGrid(upper)) return false;
+        if (IsCellSolid(lower) || IsCellSolid(upper)) return false;
+
+        return m_s[index2GridOffset(face)] > 0.5f;
     }
 
     // ==================== 公共接口 =====================
@@ -273,7 +284,10 @@ namespace VCX::MainScene {
                         for (int dk = 0; dk <= 1; ++dk) {
                             float      wz = dk ? fz : (1.0f - fz);
                             glm::ivec3 idx(i0 + di, j0 + dj, k0 + dk);
-                            if (! isValidVelocity(idx.x, idx.y, idx.z, dir)) continue;
+                            bool const regularFace = isValidVelocity(idx.x, idx.y, idx.z, dir);
+                            bool const boundaryFace = IsVelocityFaceSolidBoundary(idx, dir);
+                            if (! regularFace && ! boundaryFace) continue;
+
                             int   id  = index2GridOffset(idx);
                             float w   = wx * wy * wz;
                             float val = useFlipDelta ? (m_vel[id][dir] - m_pre_vel[id][dir])
@@ -1054,6 +1068,43 @@ namespace VCX::MainScene {
         return m_solidVel[index2GridOffset(glm::ivec3(i, j, k))][dir];
     }
 
+    bool FluidSimulator::IsVelocityFaceSolidBoundary(glm::ivec3 face, int dir) const {
+        if (! isVelocityFaceInRange(face.x, face.y, face.z, dir)) return false;
+
+        auto const [lower, upper] = FaceNeighborCells(face, dir);
+        bool const lowerSolid = ! IsInsideGrid(lower) || IsCellSolid(lower);
+        bool const upperSolid = ! IsInsideGrid(upper) || IsCellSolid(upper);
+        bool const lowerFluidDomain = IsInsideGrid(lower) && ! IsCellSolid(lower);
+        bool const upperFluidDomain = IsInsideGrid(upper) && ! IsCellSolid(upper);
+
+        // 只处理“固体-非固体”的界面；固体内部的 face 不参与流体采样。
+        return (lowerSolid || upperSolid) && (lowerFluidDomain || upperFluidDomain);
+    }
+
+    void FluidSimulator::EnforceSolidBoundaryVelocities() {
+        if (m_vel.empty()) return;
+
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    glm::ivec3 const face(i, j, k);
+                    int const        id = index2GridOffset(face);
+                    for (int dir = 0; dir < 3; ++dir) {
+                        if (! IsVelocityFaceSolidBoundary(face, dir)) continue;
+
+                        // 没有刚体写入速度时，玻璃/水槽边界就是静止 no-penetration。
+                        // 有运动刚体时，SolidBoundaryVelocity 返回 rigid.VelocityAtPoint 的法向分量。
+                        float const v = SolidBoundaryVelocity(i, j, k, dir);
+                        m_vel[id][dir] = v;
+                        if (id < static_cast<int>(m_pre_vel.size())) {
+                            m_pre_vel[id][dir] = v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     bool FluidSimulator::IsVelocityFaceInRange(glm::ivec3 face, int dir) const {
         // 复用原来的 MAC face 有效性判断,为Coupler提供一个接口
         return isVelocityFaceInRange(face.x, face.y, face.z, dir);
@@ -1228,7 +1279,10 @@ namespace VCX::MainScene {
                     for (int dk = 0; dk <= 1; ++dk) {
                         float      wz = dk ? fz : (1.0f - fz);
                         glm::ivec3 idx(i0 + di, j0 + dj, k0 + dk);
-                        if (! isValidVelocity(idx.x, idx.y, idx.z, dir)) continue;
+                        bool const regularFace = isValidVelocity(idx.x, idx.y, idx.z, dir);
+                        bool const boundaryFace = IsVelocityFaceSolidBoundary(idx, dir);
+                        if (! regularFace && ! boundaryFace) continue;
+
                         int   id  = index2GridOffset(idx);
                         float w   = wx * wy * wz;
                         float val = m_vel[id][dir];
@@ -1275,8 +1329,10 @@ namespace VCX::MainScene {
                 applySurfaceTension(sdt);
             }
             transferVelocities(true, flipRatio);
+            EnforceSolidBoundaryVelocities();
             updateParticleDensity();
             solveIncompressibility(cfg.numPressureIters, sdt, cfg.overRelaxation, cfg.compensateDrift);
+            EnforceSolidBoundaryVelocities();
             transferVelocities(false, flipRatio);
         }
         updateParticleColors();
