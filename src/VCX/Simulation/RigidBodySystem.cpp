@@ -228,6 +228,33 @@ namespace VCX::MainScene {
             return found;
         }
 
+        float BoatMeshSignedDistanceLocal(RigidBody const & body, Eigen::Vector3f const & localPoint) {
+            // 慢路径：直接查三角网格最近点和内外关系。只用于构建/缺失 SDF 时。
+            Eigen::Vector3f closestLocal = Eigen::Vector3f::Zero();
+            Eigen::Vector3f normalLocal  = Eigen::Vector3f::UnitY();
+            if (! ClosestBoatMeshPointLocal(body, localPoint, closestLocal, normalLocal)) {
+                return std::numeric_limits<float>::max();
+            }
+
+            float const unsignedDistance = (closestLocal - localPoint).norm();
+            if (MeshContainsLocalPoint(body, localPoint)) {
+                return -unsignedDistance;
+            }
+
+            // 当前船体是薄壳。这里的 SDF 表示“有效固体区域”的距离，
+            // 因此把原始三角面向外偏移 solidShellThickness 作为零等值面。
+            return unsignedDistance - std::max(0.0f, body.solidShellThickness);
+        }
+
+        float BoxSignedDistanceLocal(Eigen::Vector3f const & localPoint, Eigen::Vector3f const & dim) {
+            // 解析 box SDF。需要真实距离/比例采样时用；单纯 inside 判断请用 ContainsPoint。
+            Eigen::Vector3f const half = 0.5f * dim;
+            Eigen::Vector3f const q = localPoint.cwiseAbs() - half;
+            Eigen::Vector3f const outside = q.cwiseMax(Eigen::Vector3f::Zero());
+            float const inside = std::min(std::max({ q.x(), q.y(), q.z() }), 0.0f);
+            return outside.norm() + inside;
+        }
+
         Eigen::Quaternionf SmallRotationFromAngularVelocity(Eigen::Vector3f const & w, float dt, Eigen::Quaternionf const & q) {
             Eigen::Quaternionf omegaQ(0.0f, w.x(), w.y(), w.z());
             Eigen::Quaternionf qdot = omegaQ * q;
@@ -363,33 +390,146 @@ namespace VCX::MainScene {
         return x + GetRotationMatrix() * p;
     }
 
+    void RigidBody::BuildLocalSdfGrid(int maxResolution, float padding) {
+        // 只给 BoatHull 建局部 SDF。box/sphere 的解析查询更快也更精确。
+        localSdf = RigidSdfGrid {};
+        if (shape != RigidBodyShape::BoatHull || meshVertices.empty() || meshTriIndices.size() < 3) return;
+
+        Eigen::Vector3f mn = meshVertices.front();
+        Eigen::Vector3f mx = meshVertices.front();
+        for (Eigen::Vector3f const & v : meshVertices) {
+            mn = mn.cwiseMin(v);
+            mx = mx.cwiseMax(v);
+        }
+
+        float const shellPadding = std::max(0.0f, solidShellThickness);
+        float const pad = padding >= 0.0f ? padding : std::max(0.05f, 2.0f * shellPadding);
+        mn.array() -= pad;
+        mx.array() += pad;
+
+        Eigen::Vector3f const extent = (mx - mn).cwiseMax(Eigen::Vector3f::Constant(kEps));
+        float const maxExtent = std::max({ extent.x(), extent.y(), extent.z(), kEps });
+        int const maxRes = std::clamp(maxResolution, 8, 128);
+
+        Eigen::Vector3i res;
+        for (int axis = 0; axis < 3; ++axis) {
+            float const ratio = extent[axis] / maxExtent;
+            res[axis] = std::max(2, int(std::ceil(ratio * float(maxRes - 1))) + 1);
+        }
+
+        localSdf.valid      = true;
+        localSdf.localMin   = mn;
+        localSdf.localMax   = mx;
+        localSdf.resolution = res;
+        localSdf.spacing    = Eigen::Vector3f(
+            extent.x() / float(res.x() - 1),
+            extent.y() / float(res.y() - 1),
+            extent.z() / float(res.z() - 1));
+        localSdf.phi.assign(std::size_t(res.x()) * std::size_t(res.y()) * std::size_t(res.z()), 0.0f);
+
+        // 离线预计算：把每个局部 SDF 网格点到船体薄壳的距离存下来。
+        for (int i = 0; i < res.x(); ++i) {
+            for (int j = 0; j < res.y(); ++j) {
+                for (int k = 0; k < res.z(); ++k) {
+                    Eigen::Vector3f const p(
+                        mn.x() + localSdf.spacing.x() * float(i),
+                        mn.y() + localSdf.spacing.y() * float(j),
+                        mn.z() + localSdf.spacing.z() * float(k));
+                    localSdf.phi[localSdf.Index(i, j, k)] = BoatMeshSignedDistanceLocal(*this, p);
+                }
+            }
+        }
+    }
+
+    float RigidBody::LocalSignedDistance(Eigen::Vector3f const & localPoint) const {
+        // 统一的局部 SDF 查询入口：primitive 用解析式，BoatHull 优先查预计算网格。
+        if (shape == RigidBodyShape::Sphere) {
+            return localPoint.norm() - 0.5f * dim.x();
+        }
+
+        if (shape == RigidBodyShape::Box) {
+            return BoxSignedDistanceLocal(localPoint, dim);
+        }
+
+        if (shape == RigidBodyShape::BoatHull && localSdf.valid && ! localSdf.phi.empty()) {
+            // BoatHull 热路径：局部 SDF 网格三线性插值，避免每次扫三角面。
+            Eigen::Vector3f const mn = localSdf.localMin;
+            Eigen::Vector3f const mx = localSdf.localMax;
+            Eigen::Vector3i const res = localSdf.resolution;
+
+            if ((localPoint.array() < mn.array()).any() || (localPoint.array() > mx.array()).any()) {
+                Eigen::Vector3f const clamped = localPoint.cwiseMax(mn).cwiseMin(mx);
+                return (localPoint - clamped).norm();
+            }
+
+            Eigen::Vector3f const g(
+                (localPoint.x() - mn.x()) / std::max(localSdf.spacing.x(), kEps),
+                (localPoint.y() - mn.y()) / std::max(localSdf.spacing.y(), kEps),
+                (localPoint.z() - mn.z()) / std::max(localSdf.spacing.z(), kEps));
+
+            int const i0 = std::clamp(int(std::floor(g.x())), 0, res.x() - 1);
+            int const j0 = std::clamp(int(std::floor(g.y())), 0, res.y() - 1);
+            int const k0 = std::clamp(int(std::floor(g.z())), 0, res.z() - 1);
+            int const i1 = std::min(i0 + 1, res.x() - 1);
+            int const j1 = std::min(j0 + 1, res.y() - 1);
+            int const k1 = std::min(k0 + 1, res.z() - 1);
+
+            float const fx = std::clamp(g.x() - float(i0), 0.0f, 1.0f);
+            float const fy = std::clamp(g.y() - float(j0), 0.0f, 1.0f);
+            float const fz = std::clamp(g.z() - float(k0), 0.0f, 1.0f);
+
+            auto sample = [&](int i, int j, int k) {
+                return localSdf.phi[localSdf.Index(i, j, k)];
+            };
+
+            float const c000 = sample(i0, j0, k0);
+            float const c100 = sample(i1, j0, k0);
+            float const c010 = sample(i0, j1, k0);
+            float const c110 = sample(i1, j1, k0);
+            float const c001 = sample(i0, j0, k1);
+            float const c101 = sample(i1, j0, k1);
+            float const c011 = sample(i0, j1, k1);
+            float const c111 = sample(i1, j1, k1);
+
+            float const c00 = c000 * (1.0f - fx) + c100 * fx;
+            float const c10 = c010 * (1.0f - fx) + c110 * fx;
+            float const c01 = c001 * (1.0f - fx) + c101 * fx;
+            float const c11 = c011 * (1.0f - fx) + c111 * fx;
+            float const c0  = c00 * (1.0f - fy) + c10 * fy;
+            float const c1  = c01 * (1.0f - fy) + c11 * fy;
+            return c0 * (1.0f - fz) + c1 * fz;
+        }
+
+        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty() && meshTriIndices.size() >= 3) {
+            return BoatMeshSignedDistanceLocal(*this, localPoint);
+        }
+
+        return BoxSignedDistanceLocal(localPoint, dim);
+    }
+
+    float RigidBody::SignedDistance(Eigen::Vector3f const & worldPoint) const {
+        // 世界空间查询包装：先转局部坐标，再复用 LocalSignedDistance。
+        return LocalSignedDistance(WorldToLocal(worldPoint));
+    }
 
     bool RigidBody::ContainsPoint(Eigen::Vector3f const & worldPoint) const {
-        if (shape == RigidBodyShape::BoatHull && ! meshVertices.empty() && meshTriIndices.size() >= 3) {
-            Eigen::Vector3f const localPoint = WorldToLocal(worldPoint);
-            if (MeshContainsLocalPoint(*this, localPoint)) return true;
+        // 高频布尔查询入口。primitive 不计算完整距离，复杂形状才退回 SDF。
+        Eigen::Vector3f const localPoint = WorldToLocal(worldPoint);
 
-            // Kenney 船体是薄壳。流体网格只看 cell center，完全零厚度的话很容易漏掉表面。
-            // 这里给 BoatHull 一个显式的有效厚度；FCL 碰撞不受这个值影响。
-            Eigen::Vector3f closestLocal = Eigen::Vector3f::Zero();
-            Eigen::Vector3f normalLocal  = Eigen::Vector3f::UnitY();
-            if (ClosestBoatMeshPointLocal(*this, localPoint, closestLocal, normalLocal)) {
-                float const shellThickness = std::max(0.0f, solidShellThickness);
-                return shellThickness > 0.0f && (closestLocal - localPoint).squaredNorm() <= shellThickness * shellThickness;
-            }
-            return false;
-        }
-
-
-        Eigen::Vector3f const local = WorldToLocal(worldPoint);
+        // 这里只需要 inside/outside，不需要真实 signed distance。
+        // primitive 走更便宜的解析布尔判断；复杂形状再退回 SDF。
         if (shape == RigidBodyShape::Sphere) {
             float const r = 0.5f * dim.x();
-            return local.squaredNorm() <= r * r;
+            return localPoint.squaredNorm() <= r * r;
         }
-        Eigen::Vector3f const half = 0.5f * dim;
-        return std::abs(local.x()) <= half.x()
-            && std::abs(local.y()) <= half.y()
-            && std::abs(local.z()) <= half.z();
+
+        if (shape == RigidBodyShape::Box) {
+            Eigen::Vector3f const half = 0.5f * dim;
+            Eigen::Vector3f const a    = localPoint.cwiseAbs();
+            return a.x() <= half.x() && a.y() <= half.y() && a.z() <= half.z();
+        }
+
+        return LocalSignedDistance(localPoint) <= 0.0f;
     }
 
     Eigen::Vector3f RigidBody::ClosestSurfacePoint(Eigen::Vector3f const & worldPoint) const {
@@ -628,6 +768,8 @@ namespace VCX::MainScene {
             boat.meshTriIndices = KenneyBoatSpeedA::MakeTriangleIndices();
             // 只给流体网格一个薄壳厚度，避免 cell center 正好落不到船体表面。
             boat.solidShellThickness = 0.018f;
+            // 给流固耦合预计算局部 SDF。运行时 ContainsPoint/SignedDistance 不再逐 cell 扫三角面。
+            boat.BuildLocalSdfGrid(48);
 
             // 浮力点放在 Kenney 船体的底部/两侧下方，只有真实水粒子接近时才会被使用。
             for (int ix = 0; ix < 6; ++ix) {
@@ -942,6 +1084,9 @@ namespace VCX::MainScene {
         if (! IsValidBody(id)) return;
         auto & b = Bodies[id];
         b.shape = shape;
+        if (shape != RigidBodyShape::BoatHull) {
+            b.localSdf = RigidSdfGrid {};
+        }
         if (shape == RigidBodyShape::Sphere) {
             float const d = std::max({ b.dim.x(), b.dim.y(), b.dim.z() });
             b.dim = Eigen::Vector3f::Constant(d);
