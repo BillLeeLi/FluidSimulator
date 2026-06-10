@@ -117,14 +117,29 @@ namespace VCX::MainScene {
             trips.emplace_back(row, col, value);
         };
 
+        auto isSolidCell = [&](glm::ivec3 const & cell) {
+            if (! fluid.IsInsideGrid(cell)) return true;
+            int const id = fluid.GridIndex(cell);
+            return id < 0 || id >= static_cast<int>(fluid.m_type.size()) || fluid.m_type[id] == SOLID_CELL || fluid.IsCellSolid(cell);
+        };
+
         auto addFluidFace = [&](glm::ivec3 const & face, int dir) {
-            // 每个 MAC face 连接两个压力 cell，计算该face流体产生的散度
+            // Assemble one MAC face into the pressure projection.
             if (! fluid.IsVelocityFaceInRange(face, dir)) return;
 
             auto const [lowerCell, upperCell] = fluid.FaceNeighborCells(face, dir);
             int const lowerDof = fluid.PressureDofForCell(dofs, lowerCell);
             int const upperDof = fluid.PressureDofForCell(dofs, upperCell);
-            if (lowerDof < 0 && upperDof < 0) return;
+            if (lowerDof < 0 && upperDof < 0) return;  // 如果面相邻的两个cell都不是流体,不需要处理
+
+            bool const lowerSolid = isSolidCell(lowerCell);
+            bool const upperSolid = isSolidCell(upperCell);
+            if (lowerSolid || upperSolid) {  // 至少存在一个固体邻居，即流固界面
+                int const   fluidDof = lowerDof >= 0 ? lowerDof : upperDof;
+                float const coeff    = lowerDof >= 0 ? area : -area;
+                rhs[fluidDof] += coeff * fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                return;  // 流固界面速度使用固体速度，不作为可以由压力任意调整的流体face DOF,所以不加入矩阵项
+            }
 
             float const u = fluid.FaceVelocity(uStar, face, dir);
 
@@ -142,13 +157,6 @@ namespace VCX::MainScene {
                     // A 的流体部分加入的是 B_f M_f^-1 B_f^T
                     addMatrix(a.first, b.first, a.second * invMass * b.second);
                 }
-            }
-
-            // 固定/已知速度边界不是未知量，不进入 A做耦合，只作为已知通量移动到 b。
-            if (fluid.HasSolidBoundaryVelocity(face.x, face.y, face.z, dir)) {
-                float const uSolid = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
-                if (lowerDof >= 0 && upperDof < 0) rhs[lowerDof] -= area * uSolid;
-                if (upperDof >= 0 && lowerDof < 0) rhs[upperDof] += area * uSolid;
             }
         };
 
@@ -272,6 +280,15 @@ namespace VCX::MainScene {
                         int const lowerDof = fluid.PressureDofForCell(dofs, lowerCell);
                         int const upperDof = fluid.PressureDofForCell(dofs, upperCell);
                         if (lowerDof < 0 && upperDof < 0) continue;
+
+                        // 更新速度时固液界面上不使用压力更新，直接使用固体的边界速度
+                        bool const lowerSolid = isSolidCell(lowerCell);
+                        bool const upperSolid = isSolidCell(upperCell);
+                        if (lowerSolid || upperSolid) {
+                            int const faceId = fluid.GridIndex(face);
+                            fluid.m_vel[faceId][dir] = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                            continue;
+                        }
 
                         float const lambdaLower = lowerDof >= 0 ? lambda[lowerDof] : 0.0f;
                         float const lambdaUpper = upperDof >= 0 ? lambda[upperDof] : 0.0f;
