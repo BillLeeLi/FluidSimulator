@@ -84,13 +84,13 @@ namespace VCX::MainScene {
         }
 
         bool BodyOccupiesPoint(RigidBody const & body, Eigen::Vector3f const & worldPoint) {
-            // 一个 worldPoint 是否在刚体里面？
+            // 知道坐标判断一个 worldPoint 是否在刚体里面？
             // 这里只需要布尔内外判断；box/sphere 会走刚体侧的快速 primitive path。
             return body.ContainsPoint(worldPoint);
         }
 
         bool BodyOccupiesCellCenter(FluidSimulator const & fluid, RigidBody const & body, glm::ivec3 const & cell) {
-            // 判断cell center 是否在当前刚体内部。当前仍是中心点 0/1 判断；primitive 会走快速布尔 inside。
+            // 给一个 cell index 判断cell center 是否在当前刚体内部。当前仍是中心点 0/1 判断；primitive 会走快速布尔 inside。
             // 后续做精确变分映射时，再通过 SignedDistance 采样比例。
             return BodyOccupiesPoint(body, ToEigen(fluid.CellCenter(cell)));
         }
@@ -441,8 +441,7 @@ namespace VCX::MainScene {
         }
 
         int projectedThisCall = 0;
-        float const particleMass = 1000.0f * (4.0f / 3.0f) * 3.14159265358979323846f
-            * fluid.m_particleRadius * fluid.m_particleRadius * fluid.m_particleRadius;
+        float const particleMass =  fluidDensity * (4.0f / 3.0f) * 3.14159265358979323846f * fluid.m_particleRadius * fluid.m_particleRadius * fluid.m_particleRadius;
 
         for (int particleId = 0; particleId < fluid.m_iNumSpheres; ++particleId) {
             Eigen::Vector3f position = ToEigen(fluid.m_particlePos[particleId]);
