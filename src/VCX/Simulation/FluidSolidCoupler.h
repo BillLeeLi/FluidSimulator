@@ -3,6 +3,7 @@
 #include <vector>
 
 #include <Eigen/Core>
+#include <glm/glm.hpp>
 
 namespace VCX::MainScene {
 
@@ -16,12 +17,8 @@ namespace VCX::MainScene {
         bool  enableMovingSolidVelocity { true };
         bool  enableParticleCollisionImpulse { true };
         bool  enableBoatBuoyancy { false };
-<<<<<<< HEAD
-        bool  enableVariationalProjection { true  };
+        bool  enableVariationalProjection { true };
         float fluidDensity        { 150.0f };
-=======
-        bool  enableVariationalProjection { false };
->>>>>>> 5a8eb57 (增加了流体和玻璃的边界判断，以及部分小参数的改动)
         float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
         float particleImpulseScale { 0.5f };
@@ -52,10 +49,23 @@ namespace VCX::MainScene {
         Eigen::Vector3f BoatBuoyancyForceOnBody(int bodyId) const;
 
     private:
+        struct RigidContactFace {
+            // SolveVariationalProjection 中已经确认过的动态刚体-流体接触面。
+            // 后续求解出速度后写入 MAC 固体边界速度时复用它，避免再次扫描刚体 AABB/边界 cell。
+            int        bodyId = -1;
+            glm::ivec3 fluidCell { 0 };
+            glm::ivec3 solidCell { 0 };
+            glm::ivec3 face { 0 };
+            int        dir = 0;
+        };
+
         int _projectedParticleCount    { 0 };
         int _rigidSolidCellCount       { 0 };
         int _pressureContactFaceCount  { 0 };
         int _movingBoundaryFaceCount   { 0 };
+        // 仅当本帧变分投影成功构造过接触面时有效；非变分路径会走 fallback 扫描。
+        bool _rigidContactFaceCacheValid { false };
+        std::vector<RigidContactFace> _rigidContactFaces;
         std::vector<Eigen::Vector3f> _pressureForcesByBody;
         std::vector<Eigen::Vector3f> _particleImpulsesByBody;
         std::vector<Eigen::Vector3f> _boatBuoyancyForcesByBody;
