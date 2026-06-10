@@ -1024,9 +1024,9 @@ namespace VCX::MainScene {
             for (int j = 0; j < m_iCellY; j++) {
                 for (int k = 0; k < m_iCellZ; k++) {
                     float s = 1.0f;
-                    if (i == 0 || i == m_iCellX - 1
-                        || j == 0 || j == m_iCellY - 1
-                        || k == 0 || k == m_iCellZ - 1)
+                    if (i == 0 || i == m_iCellX - 2
+                        || j == 0 || j == m_iCellY - 2
+                        || k == 0 || k == m_iCellZ - 2)
                         s = 0.0f;
                     m_s[index2GridOffset(glm::ivec3(i, j, k))] = s;
                 }
