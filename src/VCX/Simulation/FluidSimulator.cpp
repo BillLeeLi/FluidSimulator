@@ -1345,8 +1345,9 @@ namespace VCX::MainScene {
                     float const solidFraction  = hasSolidFraction ? m_solidCellFraction[id] : 0.0f;
 
                     bool const hasLiquid = m_type[id] == FLUID_CELL || liquidFraction > 1e-4f;
-                    bool const nearlySolid = m_type[id] == SOLID_CELL || IsCellSolid(cell) || solidFraction >= 0.875f;
-                    if (! hasLiquid || nearlySolid) continue;
+                    bool const nearlySolid = m_type[id] == SOLID_CELL || IsCellSolid(cell);
+                    bool const fullSolidBySdf = hasSolidFraction && solidFraction >= 1.0f - 1e-4f;
+                    if (! hasLiquid || nearlySolid || fullSolidBySdf) continue;
 
                     result.pressureDof[id] = static_cast<int>(result.dofCell.size());
                     result.dofCell.push_back(cell);
