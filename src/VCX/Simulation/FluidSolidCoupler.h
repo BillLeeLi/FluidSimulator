@@ -17,6 +17,7 @@ namespace VCX::MainScene {
         bool  enableParticleCollisionImpulse { true };
         bool  enableBoatBuoyancy { false };
         bool  enableVariationalProjection { true  };
+        float fluidDensity        { 150.0f };
         float pressureForceScale   { 200.0f };
         float maxPressureForForce  { 80.0f };
         float particleImpulseScale { 0.5f };
@@ -31,7 +32,7 @@ namespace VCX::MainScene {
         // 将刚体光栅化到流体网格
         int  RasterizeRigidBodiesToFluid(FluidSimulator & fluid, RigidBodySystem const & rigid);
         // 将刚体接触面的速度写入流体MAC边界速度
-        int  ApplyRigidBoundaryVelocitiesToFluid(FluidSimulator & fluid, RigidBodySystem const & rigid);
+        int  ApplyRigidBoundaryVelocitiesToFluid(FluidSimulator & fluid, RigidBodySystem const & rigid, bool updatePreVel = true);
         // 根据流体压力场计算作用在刚体上的压力力，并施加到刚体系统中
         int  ApplyPressureForcesFromFluid(FluidSimulator const & fluid, RigidBodySystem & rigid);
         // 可选的备用船体浮力。压力场 demo 默认关闭。

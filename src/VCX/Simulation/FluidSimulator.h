@@ -178,7 +178,7 @@ namespace VCX::MainScene {
 
         // 重置/设置运动固体边界速度
         void ResetSolidBoundaryVelocity();
-        void SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity);
+        void SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity, bool updatePreVel = true);
         bool HasSolidBoundaryVelocity(int i, int j, int k, int dir) const;
         float SolidBoundaryVelocity(int i, int j, int k, int dir) const;
 

@@ -1031,14 +1031,16 @@ namespace VCX::MainScene {
         std::fill(m_solidVelMask.begin(), m_solidVelMask.end(), glm::ivec3(0));
     }
 
-    void FluidSimulator::SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity) {
+    void FluidSimulator::SetSolidBoundaryVelocity(glm::ivec3 idx, int dir, float velocity, bool updatePreVel) {
         if (! isVelocityFaceInRange(idx.x, idx.y, idx.z, dir)) return;
 
         int const id            = index2GridOffset(idx);
         m_solidVel[id][dir]     = velocity;
         m_solidVelMask[id][dir] = 1;
         m_vel[id][dir]          = velocity;
-        m_pre_vel[id][dir]      = velocity;
+        if (updatePreVel) {
+            m_pre_vel[id][dir] = velocity;
+        }
     }
 
     bool FluidSimulator::HasSolidBoundaryVelocity(int i, int j, int k, int dir) const {

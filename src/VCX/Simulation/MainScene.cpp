@@ -479,6 +479,9 @@ namespace VCX::MainScene {
         ImGui::Checkbox("Enable Moving Solid Velocity", &coupler.enableMovingSolidVelocity);
         ImGui::Checkbox("Enable Particle Collision Impulse", &coupler.enableParticleCollisionImpulse);
         ImGui::Checkbox("Enable Extra Boat Buoyancy", &coupler.enableBoatBuoyancy);
+        ImGui::SliderFloat("Fluid Density", &coupler.fluidDensity, 1.0f, 2000.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Used by variational projection as fluid mass density. Higher values make the fluid push rigid bodies more strongly.");
         ImGui::SliderFloat("Pressure Force Scale", &coupler.pressureForceScale, 0.0f, 500.0f);
         ImGui::SliderFloat("Max Pressure For Force", &coupler.maxPressureForForce, 0.0f, 400.0f);
         ImGui::SliderFloat("Particle Impulse Scale", &coupler.particleImpulseScale, 0.0f, 1.0f);

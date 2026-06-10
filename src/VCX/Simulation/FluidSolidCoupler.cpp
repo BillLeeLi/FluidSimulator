@@ -13,7 +13,6 @@ namespace VCX::MainScene {
 
     namespace {
         constexpr float kEps = 1e-6f;
-        constexpr float kFluidDensity = 1.0f;
 
         struct RigidRowContribution {
             // 一个压力 dof 对某个刚体的线性耦合项
@@ -92,6 +91,9 @@ namespace VCX::MainScene {
             return false;
         }
 
+        // 先清理掉旧的solid boundary velocity cache，避免读到上一帧的过时数据
+        fluid.ResetSolidBoundaryVelocity();
+
         FluidPressureDofs const dofs = fluid.BuildPressureDofs();
         int const          numDofs = static_cast<int>(dofs.dofCell.size());
         if (numDofs == 0) return false;
@@ -109,7 +111,8 @@ namespace VCX::MainScene {
         // area 是 face 面积，mass 是一个 face 控制体的近似流体质量，invMass 对应 M_f^-1。
         float const h    = std::max(fluid.m_h, kEps);
         float const area = h * h;
-        float const mass = std::max(kFluidDensity * h * h * h, kEps);
+        float const density = std::max(fluidDensity, kEps);
+        float const mass = std::max(density * h * h * h, kEps);
         float const invMass = 1.0f / mass;
 
         auto addMatrix = [&](int row, int col, float value) {
@@ -172,6 +175,7 @@ namespace VCX::MainScene {
             }
         }
 
+        std::vector<glm::ivec3> dynamicRigidFaceMask(fluid.m_iNumCells, glm::ivec3(0));  // 标记动态的刚体的接触face
         std::vector<BodyProjectionCache> bodyCaches;
         bodyCaches.reserve(rigid.Bodies.size());
 
@@ -221,11 +225,18 @@ namespace VCX::MainScene {
                             RigidGeneralizedVelocity g = RigidGeneralizedVelocity::Zero();
                             // 面压力对刚体产生线冲量和角冲量：
                             // 线冲量方向沿 face 法向，角冲量是 r x 线冲量。
-                            // 负号来自“流体散度约束”和“刚体受到反作用冲量”的符号约定。
-                            g.segment<3>(0) = -fluidCoeff * axis;
-                            g.segment<3>(3) = -fluidCoeff * r.cross(axis);
+                            // g uses the same signed flux coefficient as the fluid divergence row.
+                            // The actual pressure impulse applied to the body is -J^T lambda.
+                            g.segment<3>(0) = fluidCoeff * axis;
+                            g.segment<3>(3) = fluidCoeff * r.cross(axis);
 
                             cache.rows.push_back(RigidRowContribution { fluidDof, g });
+                            if (! body.isStatic) {
+                                int const faceId = fluid.GridIndex(face);
+                                if (faceId >= 0 && faceId < static_cast<int>(dynamicRigidFaceMask.size())) {
+                                    dynamicRigidFaceMask[faceId][dir] = 1;
+                                }
+                            }
                         }
                     }
                 }
@@ -268,6 +279,10 @@ namespace VCX::MainScene {
         Eigen::VectorXf lambda = solver.solve(rhs);
         if (solver.info() != Eigen::Success || lambda.size() != numDofs) return false;
 
+        if (_pressureForcesByBody.size() != rigid.Bodies.size()) {
+            _pressureForcesByBody.assign(rigid.Bodies.size(), Eigen::Vector3f::Zero());
+        }
+
         // 用解出的 lambda 回代更新流体 face 速度：u_new = u* - M_f^-1 B_f^T lambda。
         for (int i = 0; i < fluid.m_iCellX; ++i) {
             for (int j = 0; j < fluid.m_iCellY; ++j) {
@@ -286,7 +301,14 @@ namespace VCX::MainScene {
                         bool const upperSolid = isSolidCell(upperCell);
                         if (lowerSolid || upperSolid) {
                             int const faceId = fluid.GridIndex(face);
-                            fluid.m_vel[faceId][dir] = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                            // 回代时动态刚体界面 face 不再写 SolidBoundaryVelocity() 的旧值/零值；静态墙面仍写 0。
+                            if (enableMovingSolidVelocity
+                                && faceId >= 0
+                                && faceId < static_cast<int>(dynamicRigidFaceMask.size())
+                                && dynamicRigidFaceMask[faceId][dir] != 0) {
+                                continue;
+                            }
+                            fluid.m_vel[faceId][dir] = 0.0f;
                             continue;
                         }
 
@@ -311,10 +333,14 @@ namespace VCX::MainScene {
                 impulse += row.g * lambda[row.dof];
             }
 
+            // 更新刚体速度之后将新的刚体边界速度写回MAC网格
+            _pressureForcesByBody[cache.bodyId] += -impulse.segment<3>(0) / dt;
             rigid.SetGeneralizedVelocity(cache.bodyId, cache.vStar - cache.invMass * impulse);
         }
 
         // m_p 仍然保存压力用于可视化接口；lambda 是压力冲量，所以除以 dt 近似得到压力。
+        ApplyRigidBoundaryVelocitiesToFluid(fluid, rigid, false);
+
         std::fill(fluid.m_p.begin(), fluid.m_p.end(), 0.0f);
         for (int dof = 0; dof < numDofs; ++dof) {
             fluid.m_p[fluid.GridIndex(dofs.dofCell[dof])] = lambda[dof] / dt;
@@ -439,7 +465,7 @@ namespace VCX::MainScene {
         return solidCells;
     }
 
-    int FluidSolidCoupler::ApplyRigidBoundaryVelocitiesToFluid(FluidSimulator & fluid, RigidBodySystem const & rigid) {
+    int FluidSolidCoupler::ApplyRigidBoundaryVelocitiesToFluid(FluidSimulator & fluid, RigidBodySystem const & rigid, bool updatePreVel) {
         fluid.ResetSolidBoundaryVelocity();
         if (! enableMovingSolidVelocity || ! enableRigidSolidMask || fluid.m_type.empty()) {
             return 0;
@@ -472,7 +498,7 @@ namespace VCX::MainScene {
                             Eigen::Vector3f const center = ToEigen(fluid.FaceCenter(face, dir));
                             Eigen::Vector3f const vel    = rigid.VelocityAtPoint(bodyId, center);
 
-                            fluid.SetSolidBoundaryVelocity(face, dir, vel[dir]);
+                            fluid.SetSolidBoundaryVelocity(face, dir, vel[dir], updatePreVel);
                             ++boundaryFaces;
                         }
                     }
