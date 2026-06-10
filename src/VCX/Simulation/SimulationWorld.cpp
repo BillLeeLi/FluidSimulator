@@ -131,6 +131,7 @@ namespace VCX::MainScene {
             // 先把玻璃水槽/刚体边界 face 从普通流体 face 中拿出来，避免墙面上的未投影速度被 G2P 采回粒子。
             _fluid.EnforceSolidBoundaryVelocities();
             _fluid.updateParticleDensity();
+            _fluid.BuildSimulationSDFFields(_rigidBodies);
 
             // 运动刚体的边界速度要在两种压力投影路径之前写入；否则 VP 路径会把运动固体当成静止墙。
             _coupler.ApplyRigidBoundaryVelocitiesToFluid(_fluid, _rigidBodies);

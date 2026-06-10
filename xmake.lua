@@ -120,6 +120,7 @@ target("offline-export")
     add_files("src/VCX/Simulation/FluidSolidCoupler.cpp")
     add_files("src/VCX/Simulation/RigidBodySystem.cpp")
     add_files("src/VCX/Simulation/SimulationWorld.cpp")
+    add_files("src/VCX/Simulation/SDFField.cpp")
     if is_plat("windows") then
         add_cxflags("/EHsc")
     end

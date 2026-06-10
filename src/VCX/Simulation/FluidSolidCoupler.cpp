@@ -122,13 +122,25 @@ namespace VCX::MainScene {
         trips.reserve(static_cast<std::size_t>(numDofs) * 8);
         Eigen::VectorXf rhs = Eigen::VectorXf::Zero(numDofs);
 
-        // 密度固定，且用最简单的均匀密度和完整 face 面积，没有搞占比权重
-        // area 是 face 面积，mass 是一个 face 控制体的近似流体质量，invMass 对应 M_f^-1。
+        // area 是完整 MAC face 面积。接入 SDF fraction 后，矩阵里实际使用 theta*area。
+        // face 质量也按有效面积缩放：m_f = rho * (theta*area) * h。
+        // 这样 B M^-1 B^T 对 theta 是线性缩放，而不是错误地变成 theta^2。
         float const h    = std::max(fluid.m_h, kEps);
         float const area = h * h;
         float const density = std::max(fluidDensity, kEps);
-        float const mass = std::max(density * h * h * h, kEps);
-        float const invMass = 1.0f / mass;
+        bool const hasFaceFractions = fluid.m_faceOpenFraction.size() == static_cast<std::size_t>(fluid.m_iNumCells);
+
+        auto faceOpenFraction = [&](glm::ivec3 const & face, int dir) {
+            return hasFaceFractions ? fluid.FaceOpenFraction(face, dir) : 1.0f;
+        };
+
+        auto faceBlockedFraction = [&](glm::ivec3 const & face, int dir) {
+            return hasFaceFractions ? glm::clamp(1.0f - fluid.FaceOpenFraction(face, dir), 0.0f, 1.0f) : 1.0f;
+        };
+
+        auto invMassForEffectiveArea = [&](float effectiveArea) {
+            return 1.0f / std::max(density * effectiveArea * h, kEps);
+        };
 
         auto addMatrix = [&](int row, int col, float value) {
             if (row < 0 || col < 0 || std::abs(value) <= 1e-12f) return;
@@ -150,20 +162,30 @@ namespace VCX::MainScene {
             int const upperDof = fluid.PressureDofForCell(dofs, upperCell);
             if (lowerDof < 0 && upperDof < 0) return;  // 如果面相邻的两个cell都不是流体,不需要处理
 
+            float const openFraction = faceOpenFraction(face, dir);
+
             bool const lowerSolid = isSolidCell(lowerCell);
             bool const upperSolid = isSolidCell(upperCell);
             if (lowerSolid || upperSolid) {  // 至少存在一个固体邻居，即流固界面
+                float const blockedFraction = faceBlockedFraction(face, dir);
+                if (blockedFraction <= 1e-4f) return;
+
                 int const   fluidDof = lowerDof >= 0 ? lowerDof : upperDof;
-                float const coeff    = lowerDof >= 0 ? area : -area;
+                float const blockedArea = area * blockedFraction;
+                float const coeff    = lowerDof >= 0 ? blockedArea : -blockedArea;
                 rhs[fluidDof] += coeff * fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
                 return;  // 流固界面速度使用固体速度，不作为可以由压力任意调整的流体face DOF,所以不加入矩阵项
             }
 
+            if (openFraction <= 1e-4f) return;
+
             float const u = fluid.FaceVelocity(uStar, face, dir);
+            float const effectiveArea = area * openFraction;
+            float const faceInvMass = invMassForEffectiveArea(effectiveArea);
 
             std::array<std::pair<int, float>, 2> coeffs {
-                std::pair<int, float> { lowerDof,  area },
-                std::pair<int, float> { upperDof, -area },
+                std::pair<int, float> { lowerDof,  effectiveArea },
+                std::pair<int, float> { upperDof, -effectiveArea },
             };
 
             for (auto const & a : coeffs) {
@@ -173,7 +195,7 @@ namespace VCX::MainScene {
                 for (auto const & b : coeffs) {
                     if (b.first < 0) continue;
                     // A 的流体部分加入的是 B_f M_f^-1 B_f^T
-                    addMatrix(a.first, b.first, a.second * invMass * b.second);
+                    addMatrix(a.first, b.first, a.second * faceInvMass * b.second);
                 }
             }
         };
@@ -220,11 +242,15 @@ namespace VCX::MainScene {
                 if (! fluid.IsVelocityFaceInRange(face, dir)) return;
 
                 auto const [lowerCell, upperCell] = fluid.FaceNeighborCells(face, dir);
+                float const blockedFraction = faceBlockedFraction(face, dir);
+                if (blockedFraction <= 1e-4f) return;
+
+                float const blockedArea = area * blockedFraction;
                 float fluidCoeff = 0.0f;
                 if (fluidCell == lowerCell) {
-                    fluidCoeff = area;
+                    fluidCoeff = blockedArea;
                 } else if (fluidCell == upperCell) {
-                    fluidCoeff = -area;
+                    fluidCoeff = -blockedArea;
                 } else {
                     return;
                 }
@@ -351,6 +377,8 @@ namespace VCX::MainScene {
                         if (lowerDof < 0 && upperDof < 0) continue;
 
                         // 更新速度时固液界面上不使用压力更新，直接使用固体的边界速度
+                        float const openFraction = faceOpenFraction(face, dir);
+
                         bool const lowerSolid = isSolidCell(lowerCell);
                         bool const upperSolid = isSolidCell(upperCell);
                         if (lowerSolid || upperSolid) {
@@ -366,12 +394,15 @@ namespace VCX::MainScene {
                             continue;
                         }
 
+                        if (openFraction <= 1e-4f) continue;
+
                         float const lambdaLower = lowerDof >= 0 ? lambda[lowerDof] : 0.0f;
                         float const lambdaUpper = upperDof >= 0 ? lambda[upperDof] : 0.0f;
-                        float const impulse     = area * (lambdaLower - lambdaUpper);
+                        float const effectiveArea = area * openFraction;
+                        float const impulse     = effectiveArea * (lambdaLower - lambdaUpper);
 
                         int const faceId = fluid.GridIndex(face);
-                        fluid.m_vel[faceId][dir] = uStar[faceId][dir] - invMass * impulse;
+                        fluid.m_vel[faceId][dir] = uStar[faceId][dir] - invMassForEffectiveArea(effectiveArea) * impulse;
                     }
                 }
             }

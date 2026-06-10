@@ -1,11 +1,15 @@
 #pragma once
 
+#include "Simulation/SDFField.h"
+
 #include <glm/glm.hpp>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
 namespace VCX::MainScene {
+    class RigidBodySystem;
+
     // 单元格类型标记
     const int EMPTY_CELL = 0;
     const int FLUID_CELL = 1;
@@ -78,6 +82,20 @@ namespace VCX::MainScene {
         std::vector<float> m_particleDensity;            // 每个格点的核密度估计
         float              m_particleRestDensity = 1.0f; // 静止密度 (初始化时估算)
 
+        // ==================== 仿真 SDF 几何场 ====================
+        // SDF 本身只描述边界位置；下面的 fraction 才是投影矩阵最终要消费的几何权重。
+        SDFField m_phiFluidSim; // 粒子构建的仿真用液体 SDF；不做渲染平滑
+        SDFField m_phiSolid;    // 刚体/水槽边界构建的仿真用固体 SDF
+        float    m_simSdfParticleRadius = 0.0f; // 0 => 默认使用 m_particleRadius
+        float    m_simSdfNarrowBand     = 0.0f; // 0 => 默认窄带宽度
+        float    m_solidSdfMaxDistance  = 0.0f; // 0 => 默认固体 SDF 更新范围
+        // cell fraction: 1 表示该压力 cell 完全被对应几何占据，0 表示完全没有占据。
+        std::vector<float> m_liquidCellFraction;
+        std::vector<float> m_solidCellFraction;
+        // face open fraction: x/y/z 分量分别对应同一 grid index 上的 u/v/w MAC face。
+        // 1 表示 face 完全开放，0 表示完全被固体遮挡。
+        std::vector<glm::vec3> m_faceOpenFraction;
+
         // ==================== 流体表面建模 ====================
         std::vector<float>     m_surfacePhi;       // 近似 signed distance（不保证梯度大小为1），只在表面窄带内可靠
         std::vector<float>     m_surfaceColor;     // 标量场c(x)，表示x附近的粒子加权数量（越小越接近流体表面）
@@ -144,6 +162,20 @@ namespace VCX::MainScene {
         void updateSurfaceField();
         void computeSurfaceGeometry();
         void applySurfaceTension(float dt);
+
+        // 刷新仿真 SDF/fraction。调用点放在 P2G/密度更新之后、压力投影之前。
+        void EnsureSimulationSDFFields();
+        void ClearSimulationSDFFields();
+        void BuildFluidSimulationSDF();
+        void BuildSolidSimulationSDF(RigidBodySystem const & rigid);
+        void BuildSimulationSDFFields(RigidBodySystem const & rigid);
+        void EnsureSimulationFractionFields();
+        void ClearSimulationFractionFields();
+        void ComputeLiquidCellFractions();
+        void ComputeSolidCellFractions();
+        void ComputeFaceOpenFractions();
+        void ComputeSimulationFractions();
+        float FaceOpenFraction(glm::ivec3 face, int dir) const;
 
         void updateRenderableSurface();
         FluidSurfaceMesh const & GetRenderableSurface() const { return m_renderSurfaceMesh; }

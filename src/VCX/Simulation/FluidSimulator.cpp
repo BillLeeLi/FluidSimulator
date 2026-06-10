@@ -1,4 +1,5 @@
 #include "Simulation/FluidSimulator.h"
+#include "Simulation/RigidBodySystem.h"
 
 #include <algorithm>
 #include <array>
@@ -720,6 +721,186 @@ namespace VCX::MainScene {
         }
     }
 
+    void FluidSimulator::EnsureSimulationSDFFields() {
+        if (m_iCellX <= 0 || m_iCellY <= 0 || m_iCellZ <= 0 || m_h <= 0.0f) return;
+
+        glm::vec3 const origin(-0.5f);
+        int const cellCount = m_iCellX * m_iCellY * m_iCellZ;
+
+        bool const fluidNeedsResize = ! m_phiFluidSim.IsValid()
+            || m_phiFluidSim.nx != m_iCellX
+            || m_phiFluidSim.ny != m_iCellY
+            || m_phiFluidSim.nz != m_iCellZ
+            || std::abs(m_phiFluidSim.dx - m_h) > 1e-7f
+            || m_phiFluidSim.phi.size() != std::size_t(cellCount);
+        if (fluidNeedsResize) {
+            m_phiFluidSim.Resize(m_iCellX, m_iCellY, m_iCellZ, m_h, origin, 4.0f * m_h);
+        }
+
+        bool const solidNeedsResize = ! m_phiSolid.IsValid()
+            || m_phiSolid.nx != m_iCellX
+            || m_phiSolid.ny != m_iCellY
+            || m_phiSolid.nz != m_iCellZ
+            || std::abs(m_phiSolid.dx - m_h) > 1e-7f
+            || m_phiSolid.phi.size() != std::size_t(cellCount);
+        if (solidNeedsResize) {
+            m_phiSolid.Resize(m_iCellX, m_iCellY, m_iCellZ, m_h, origin, 4.0f * m_h);
+        }
+    }
+
+    void FluidSimulator::ClearSimulationSDFFields() {
+        m_phiFluidSim.Clear();
+        m_phiSolid.Clear();
+        m_simSdfParticleRadius = 0.0f;
+        m_simSdfNarrowBand     = 0.0f;
+        m_solidSdfMaxDistance  = 0.0f;
+        ClearSimulationFractionFields();
+    }
+
+    void FluidSimulator::BuildFluidSimulationSDF() {
+        EnsureSimulationSDFFields();
+        if (! m_phiFluidSim.IsValid()) return;
+
+        float const radius = (m_simSdfParticleRadius > 0.0f)
+            ? m_simSdfParticleRadius
+            : m_particleRadius;
+        BuildFluidSDFFromParticles(m_particlePos, m_phiFluidSim, radius, m_simSdfNarrowBand);
+    }
+
+    void FluidSimulator::BuildSolidSimulationSDF(RigidBodySystem const & rigid) {
+        EnsureSimulationSDFFields();
+        if (! m_phiSolid.IsValid()) return;
+
+        BuildSolidSDFFromRigidBodies(rigid, m_phiSolid, m_solidSdfMaxDistance, true);
+    }
+
+    void FluidSimulator::BuildSimulationSDFFields(RigidBodySystem const & rigid) {
+        EnsureSimulationSDFFields();
+        BuildFluidSimulationSDF();
+        BuildSolidSimulationSDF(rigid);
+        ComputeSimulationFractions();
+    }
+
+    void FluidSimulator::EnsureSimulationFractionFields() {
+        if (m_iNumCells <= 0) return;
+
+        if (m_liquidCellFraction.size() != std::size_t(m_iNumCells)) {
+            m_liquidCellFraction.assign(m_iNumCells, 0.0f);
+        }
+        if (m_solidCellFraction.size() != std::size_t(m_iNumCells)) {
+            m_solidCellFraction.assign(m_iNumCells, 0.0f);
+        }
+        if (m_faceOpenFraction.size() != std::size_t(m_iNumCells)) {
+            m_faceOpenFraction.assign(m_iNumCells, glm::vec3(0.0f));
+        }
+    }
+
+    void FluidSimulator::ClearSimulationFractionFields() {
+        m_liquidCellFraction.clear();
+        m_solidCellFraction.clear();
+        m_faceOpenFraction.clear();
+    }
+
+    void FluidSimulator::ComputeLiquidCellFractions() {
+        EnsureSimulationFractionFields();
+        if (! m_phiFluidSim.IsValid() || m_liquidCellFraction.empty()) return;
+
+        // 当前网格的 cell idx 对应 [idx, idx+1] 这一个 h^3 体积。
+        // 第一版使用 8 个角点判断 phi<0 的比例；后续可替换为更密的 supersampling。
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    int inside = 0;
+                    for (int sx = 0; sx <= 1; ++sx) {
+                        for (int sy = 0; sy <= 1; ++sy) {
+                            for (int sz = 0; sz <= 1; ++sz) {
+                                glm::vec3 const p = (glm::vec3(i + sx, j + sy, k + sz) * m_h) - glm::vec3(0.5f);
+                                if (SampleSDF(m_phiFluidSim, p) < 0.0f) ++inside;
+                            }
+                        }
+                    }
+                    m_liquidCellFraction[index2GridOffset(glm::ivec3(i, j, k))] = float(inside) / 8.0f;
+                }
+            }
+        }
+    }
+
+    void FluidSimulator::ComputeSolidCellFractions() {
+        EnsureSimulationFractionFields();
+        if (! m_phiSolid.IsValid() || m_solidCellFraction.empty()) return;
+
+        // solid fraction 与 liquid fraction 使用同一套 8-corner 近似，便于后续比较和调试。
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    int inside = 0;
+                    for (int sx = 0; sx <= 1; ++sx) {
+                        for (int sy = 0; sy <= 1; ++sy) {
+                            for (int sz = 0; sz <= 1; ++sz) {
+                                glm::vec3 const p = (glm::vec3(i + sx, j + sy, k + sz) * m_h) - glm::vec3(0.5f);
+                                if (SampleSDF(m_phiSolid, p) < 0.0f) ++inside;
+                            }
+                        }
+                    }
+                    m_solidCellFraction[index2GridOffset(glm::ivec3(i, j, k))] = float(inside) / 8.0f;
+                }
+            }
+        }
+    }
+
+    void FluidSimulator::ComputeFaceOpenFractions() {
+        EnsureSimulationFractionFields();
+        if (! m_phiSolid.IsValid() || m_faceOpenFraction.empty()) return;
+
+        std::fill(m_faceOpenFraction.begin(), m_faceOpenFraction.end(), glm::vec3(0.0f));
+
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    glm::ivec3 const face(i, j, k);
+                    int const faceId = index2GridOffset(face);
+
+                    for (int dir = 0; dir < 3; ++dir) {
+                        if (! isVelocityFaceInRange(i, j, k, dir)) continue;
+
+                        int const uAxis = (dir + 1) % 3;
+                        int const vAxis = (dir + 2) % 3;
+                        int open = 0;
+
+                        // 在 face 平面上做 2x2 子采样，采样点位于四个象限中心，避开边缘的符号抖动。
+                        for (int su = 0; su < 2; ++su) {
+                            for (int sv = 0; sv < 2; ++sv) {
+                                glm::vec3 p = FaceCenter(face, dir);
+                                p[uAxis] += (float(su) - 0.5f) * 0.5f * m_h;
+                                p[vAxis] += (float(sv) - 0.5f) * 0.5f * m_h;
+                                if (SampleSDF(m_phiSolid, p) > 0.0f) ++open;
+                            }
+                        }
+
+                        m_faceOpenFraction[faceId][dir] = float(open) / 4.0f;
+                    }
+                }
+            }
+        }
+    }
+
+    void FluidSimulator::ComputeSimulationFractions() {
+        EnsureSimulationFractionFields();
+        ComputeLiquidCellFractions();
+        ComputeSolidCellFractions();
+        ComputeFaceOpenFractions();
+    }
+
+    float FluidSimulator::FaceOpenFraction(glm::ivec3 face, int dir) const {
+        if (dir < 0 || dir >= 3 || ! IsVelocityFaceInRange(face, dir) || m_faceOpenFraction.empty()) {
+            return 0.0f;
+        }
+
+        int const id = index2GridOffset(face);
+        if (id < 0 || id >= static_cast<int>(m_faceOpenFraction.size())) return 0.0f;
+        return glm::clamp(m_faceOpenFraction[id][dir], 0.0f, 1.0f);
+    }
+
     void FluidSimulator::EnsureSurfaceFields() {
         if (m_iNumCells <= 0) return;
 
@@ -951,6 +1132,9 @@ namespace VCX::MainScene {
         m_particleDensity.clear();
         m_particleDensity.resize(m_iNumCells, 0.0f);
 
+        ClearSimulationSDFFields();
+        EnsureSimulationSDFFields();
+
         // 建模流体表面
         if (enableSurfaceModeling) {
             ClearSurfaceFields();
@@ -1141,19 +1325,28 @@ namespace VCX::MainScene {
     }
 
     FluidPressureDofs FluidSimulator::BuildPressureDofs() const {
-        // Ax=b 的未知量个数不是总 cell 数，而是当前被粒子标记为 FLUID_CELL 的数量。
-        // 空气和固体没有压力未知量，所以它们在 pressureDof 中保持 -1。
+        // Ax=b 的未知量个数不是总 cell 数。
+        // 旧逻辑只给“粒子落入的 FLUID_CELL”建 dof；接入 SDF 后，液体体积分数>0的 cut-cell 也可成为压力未知量。
+        // 近似完全固体的 cell 仍然排除，避免在刚体内部建立压力自由度。
         FluidPressureDofs result;
         result.pressureDof.assign(m_iNumCells, -1);
 
         if (m_type.empty()) return result;
+
+        bool const hasLiquidFraction = m_liquidCellFraction.size() == std::size_t(m_iNumCells);
+        bool const hasSolidFraction  = m_solidCellFraction.size() == std::size_t(m_iNumCells);
 
         for (int i = 0; i < m_iCellX; ++i) {
             for (int j = 0; j < m_iCellY; ++j) {
                 for (int k = 0; k < m_iCellZ; ++k) {
                     glm::ivec3 const cell(i, j, k);
                     int const        id = index2GridOffset(cell);
-                    if (m_type[id] != FLUID_CELL) continue;
+                    float const liquidFraction = hasLiquidFraction ? m_liquidCellFraction[id] : 0.0f;
+                    float const solidFraction  = hasSolidFraction ? m_solidCellFraction[id] : 0.0f;
+
+                    bool const hasLiquid = m_type[id] == FLUID_CELL || liquidFraction > 1e-4f;
+                    bool const nearlySolid = m_type[id] == SOLID_CELL || IsCellSolid(cell) || solidFraction >= 0.875f;
+                    if (! hasLiquid || nearlySolid) continue;
 
                     result.pressureDof[id] = static_cast<int>(result.dofCell.size());
                     result.dofCell.push_back(cell);
@@ -1331,6 +1524,8 @@ namespace VCX::MainScene {
             transferVelocities(true, flipRatio);
             EnforceSolidBoundaryVelocities();
             updateParticleDensity();
+            BuildFluidSimulationSDF();
+            ComputeLiquidCellFractions();
             solveIncompressibility(cfg.numPressureIters, sdt, cfg.overRelaxation, cfg.compensateDrift);
             EnforceSolidBoundaryVelocities();
             transferVelocities(false, flipRatio);
