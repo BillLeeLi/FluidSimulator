@@ -380,9 +380,16 @@ namespace VCX::MainScene {
         auto & coupler = _world.GetCoupler();
         if (! ImGui::CollapsingHeader("Rigid Body Controls", ImGuiTreeNodeFlags_DefaultOpen)) return;
 
-        char const * presetNames[] = { "Fluid Coupling Mixed", "Box Collision", "Mixed Stack", "Boat In Water" };
+        char const * presetNames[] = {
+            "Fluid Coupling Mixed",
+            "Box Collision",
+            "Mixed Stack",
+            "Boat In Water",
+            "Boat Drop Into Pool",
+            "Surface Tension Blob",
+        };
         int          preset        = int(_world.RigidPreset());
-        if (ImGui::Combo("Rigid Preset", &preset, presetNames, 4)) {
+        if (ImGui::Combo("Rigid Preset", &preset, presetNames, 6)) {
             _world.SetRigidPreset(RigidBodyPreset(preset));
             RebuildRigidBodyRenderItem();
         }

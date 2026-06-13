@@ -239,37 +239,54 @@ def mat_principled(name: str, color=(1, 1, 1, 1), roughness=0.5, metallic=0.0) -
     return m
 
 
-def mat_water(alpha: float, roughness: float, ior: float) -> bpy.types.Material:
-    m = bpy.data.materials.new("water_visible_dielectric")
-    m.diffuse_color = (0.62, 0.88, 1.0, alpha)
+def mat_solid_diffuse(name: str, color=(0.35, 0.02, 0.02, 1.0), roughness=0.45) -> bpy.types.Material:
+    """Opaque solid material for rigid bodies.
+
+    This avoids Blender-version-dependent Principled BSDF input names and
+    makes the rigid-body color deterministic in Cycles.
+    """
+    m = bpy.data.materials.new(name)
+    m.diffuse_color = color
     m.use_nodes = True
     nt = m.node_tree
     nt.nodes.clear()
     out = nt.nodes.new("ShaderNodeOutputMaterial")
-    mix = nt.nodes.new("ShaderNodeMixShader")
-    glass = nt.nodes.new("ShaderNodeBsdfGlass")
-    glossy = nt.nodes.new("ShaderNodeBsdfGlossy")
-    transparent = nt.nodes.new("ShaderNodeBsdfTransparent")
-    mix2 = nt.nodes.new("ShaderNodeMixShader")
+    diffuse = nt.nodes.new("ShaderNodeBsdfDiffuse")
+    if "Color" in diffuse.inputs:
+        diffuse.inputs["Color"].default_value = color
+    if "Roughness" in diffuse.inputs:
+        diffuse.inputs["Roughness"].default_value = roughness
+    nt.links.new(diffuse.outputs["BSDF"], out.inputs["Surface"])
+    return m
 
-    glass.inputs["Color"].default_value = (0.72, 0.93, 1.0, 1.0)
-    glass.inputs["Roughness"].default_value = roughness
-    if "IOR" in glass.inputs:
-        glass.inputs["IOR"].default_value = ior
-    glossy.inputs["Color"].default_value = (0.60, 0.90, 1.0, 1.0)
-    glossy.inputs["Roughness"].default_value = max(0.01, roughness * 1.5)
-    transparent.inputs["Color"].default_value = (0.80, 0.95, 1.0, alpha)
-    # A tiny glossy component makes a zero-thickness liquid surface readable.
-    mix.inputs[0].default_value = 0.18
-    mix2.inputs[0].default_value = max(0.02, min(0.45, 1.0 - alpha))
-    nt.links.new(glossy.outputs[0], mix.inputs[1])
-    nt.links.new(glass.outputs[0], mix.inputs[2])
-    nt.links.new(mix.outputs[0], mix2.inputs[1])
-    nt.links.new(transparent.outputs[0], mix2.inputs[2])
-    nt.links.new(mix2.outputs[0], out.inputs[0])
-    m.blend_method = "BLEND"
-    if hasattr(m, "use_screen_refraction"):
-        m.use_screen_refraction = True
+
+def mat_water(alpha: float, roughness: float, ior: float) -> bpy.types.Material:
+    m = bpy.data.materials.new("water_dielectric_with_absorption")
+    m.diffuse_color = (0.62, 0.88, 1.0, 1.0)
+    m.use_nodes = True
+    nt = m.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    surface = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    absorption = nt.nodes.new("ShaderNodeVolumeAbsorption")
+
+    def set_surface_input(names: Sequence[str], value) -> None:
+        for name in names:
+            if name in surface.inputs:
+                surface.inputs[name].default_value = value
+                return
+
+    set_surface_input(["Base Color"], (0.72, 0.93, 1.0, 1.0))
+    set_surface_input(["Roughness"], roughness)
+    set_surface_input(["IOR"], ior)
+    set_surface_input(["Transmission Weight", "Transmission"], 1.0)
+    if "Alpha" in surface.inputs:
+        surface.inputs["Alpha"].default_value = 1.0
+
+    absorption.inputs["Color"].default_value = (0.35, 0.78, 0.95, 1.0)
+    absorption.inputs["Density"].default_value = max(0.0, min(1.0, alpha)) * 0.6
+    nt.links.new(surface.outputs["BSDF"], out.inputs["Surface"])
+    nt.links.new(absorption.outputs["Volume"], out.inputs["Volume"])
     return m
 
 
@@ -430,13 +447,14 @@ def setup_camera(bounds_min: Vector, bounds_max: Vector, mode: str, ortho_overri
     print(f"[BlenderRender] Camera location={tuple(round(v, 4) for v in cam.location)} ortho={cam_data.ortho_scale:.4f}")
     return cam
 
-def add_area_light(name: str, location: Vec3, power: float, size: float) -> None:
+def add_area_light(name: str, location: Vec3, target: Vector, power: float, size: float) -> None:
     light_data = bpy.data.lights.new(name, type="AREA")
     light_data.energy = power
     light_data.size = size
     obj = bpy.data.objects.new(name, light_data)
     bpy.context.collection.objects.link(obj)
     obj.location = location
+    look_at(obj, target)
 
 
 def add_box(name: str, loc: Vec3, scale: Vec3, mat: bpy.types.Material) -> bpy.types.Object:
@@ -459,10 +477,12 @@ def setup_environment(bounds_min: Vector, bounds_max: Vector, tank_style: str) -
     ground_mat = mat_principled("matte_warm_floor", (0.70, 0.70, 0.66, 1.0), roughness=0.68)
     glass_mat = mat_glass_frame()
 
-    # Lights: z is vertical now.
-    add_area_light("large_softbox", (0.2, -1.6, 2.3), 580, 4.2)
-    add_area_light("front_water_highlight", (-1.2, -0.9, 1.45), 95, 2.0)
-    add_area_light("rim_light", (1.4, 1.2, 1.25), 65, 2.8)
+    # Lights: z is vertical now. Area lights emit along local -Z, so aim them
+    # at the exported scene instead of relying on their default rotation.
+    light_target = (bounds_min + bounds_max) * 0.5
+    add_area_light("large_softbox", (0.2, -1.6, 2.3), light_target, 580, 4.2)
+    add_area_light("front_water_highlight", (-1.2, -0.9, 1.45), light_target, 95, 2.0)
+    add_area_light("rim_light", (1.4, 1.2, 1.25), light_target, 65, 2.8)
 
     # Ground plane below the tank.  The old script used Y as vertical, which
     # was the reason the water/tank appeared rotated.  Here Z is vertical.
@@ -508,10 +528,40 @@ def setup_environment(bounds_min: Vector, bounds_max: Vector, tank_style: str) -
             add_box("tank_front_pane", (0, mn.y - 0.003, 0), (1.0, 0.006, 1.0), pane_mat)
 
 def remove_frame_objects() -> None:
+    frame_data = []
     for obj in list(bpy.context.scene.objects):
         if obj.name.startswith(("fluid_", "rigid_", "frame_import_")) or obj.name == "fluid_metaball":
+            if obj.type in {"MESH", "META"} and obj.data is not None:
+                frame_data.append((obj.type, obj.data))
             bpy.data.objects.remove(obj, do_unlink=True)
 
+    for data_type, data in frame_data:
+        if data.users != 0:
+            continue
+        if data_type == "MESH":
+            bpy.data.meshes.remove(data)
+        elif data_type == "META":
+            bpy.data.metaballs.remove(data)
+
+
+
+
+def assign_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
+    """Force all mesh faces to use exactly this material.
+
+    Some Blender PLY imports create an existing default/white material slot.
+    If we only append a new material, faces may keep material_index=0 and
+    continue rendering white. Clearing slots and resetting polygon indices makes
+    the requested material deterministic.
+    """
+    if obj is None or obj.type != "MESH":
+        return
+    obj.data.materials.clear()
+    obj.data.materials.append(mat)
+    for poly in obj.data.polygons:
+        poly.material_index = 0
+    obj.active_material = mat
+    obj.color = mat.diffuse_color
 
 def render_frame(args: argparse.Namespace, frame: int, mats: dict[str, bpy.types.Material], frames_dir: Path, render_dir: Path) -> None:
     remove_frame_objects()
@@ -525,7 +575,7 @@ def render_frame(args: argparse.Namespace, frame: int, mats: dict[str, bpy.types
     else:
         fluid_obj = import_ply(fluid_ply, name=f"fluid_surface_{tag}")
         if fluid_obj and fluid_obj.type == "MESH":
-            fluid_obj.data.materials.append(mats["water"])
+            assign_material(fluid_obj, mats["water"])
             smooth_mesh(fluid_obj, args.subdivision, args.mesh_merge_distance)
         if (fluid_obj is None or (getattr(fluid_obj.data, "vertices", []) and len(fluid_obj.data.vertices) == 0)) and args.mode == "auto":
             fluid_obj = create_metaball_from_points(particle_ply, mats["water"], args.metaball_radius, args.metaball_resolution)
@@ -536,7 +586,7 @@ def render_frame(args: argparse.Namespace, frame: int, mats: dict[str, bpy.types
         if obj is None:
             continue
         mat = mats["boat"] if "boat" in path.name.lower() or "kenney" in path.name.lower() else mats["rigid"]
-        obj.data.materials.append(mat)
+        assign_material(obj, mat)
         smooth_mesh(obj, 0, args.mesh_merge_distance)
 
     bpy.context.scene.frame_set(frame)
@@ -547,6 +597,7 @@ def render_frame(args: argparse.Namespace, frame: int, mats: dict[str, bpy.types
 
 def main() -> None:
     args = parse_args()
+    print(f"[BlenderRender] USING SCRIPT: {Path(__file__).resolve()}")
     root = Path(args.root).resolve()
     frames_dir = root / "frames"
     if not frames_dir.exists():
@@ -589,9 +640,10 @@ def main() -> None:
 
     mats = {
         "water": mat_water(args.water_alpha, args.water_roughness, args.water_ior),
-        "boat": mat_principled("boat_saturated_blue", (0.08, 0.22, 0.72, 1.0), roughness=0.35),
-        "rigid": mat_principled("rigid_warm_solid", (0.88, 0.56, 0.38, 1.0), roughness=0.45),
+        "boat": mat_solid_diffuse("boat_dark_red_forced", (0.45, 0.00, 0.00, 1.0), roughness=0.38),
+        "rigid": mat_solid_diffuse("rigid_dark_red_forced", (0.45, 0.00, 0.00, 1.0), roughness=0.45),
     }
+    print(f"[BlenderRender] rigid diffuse_color={tuple(round(v, 3) for v in mats['rigid'].diffuse_color)}")
 
     for frame in frames:
         render_frame(args, frame, mats, frames_dir, render_dir)

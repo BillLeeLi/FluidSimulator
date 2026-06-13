@@ -86,6 +86,7 @@ namespace VCX::MainScene {
 
         std::vector<RigidBodyResetFlag> CaptureRigidBodyResetFlags() const;
         void RestoreRigidBodyResetFlags(std::vector<RigidBodyResetFlag> const & flags);
+        void ApplyPresetSceneDefaults(bool oldFluidGravity, bool oldSurfaceModeling);
     };
 
 } // namespace VCX::MainScene

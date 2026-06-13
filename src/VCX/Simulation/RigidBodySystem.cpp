@@ -789,6 +789,47 @@ namespace VCX::MainScene {
             addLab1StyleTankBoundary();
             break;
         }
+        case RigidBodyPreset::BoatDropIntoPool: {
+            RigidBody boat;
+            boat.name        = "kenney_speed_boat_drop";
+            boat.shape       = RigidBodyShape::BoatHull;
+            boat.dim         = Eigen::Vector3f(0.47f, 0.21f, 0.25f);
+            boat.x           = Eigen::Vector3f(0.0f, 0.22f, 0.0f);
+            boat.q           = Eigen::Quaternionf::Identity();
+            boat.v           = Eigen::Vector3f::Zero();
+            boat.w           = Eigen::Vector3f::Zero();
+            boat.mass        = 1.10f;
+            boat.restitution = 0.02f;
+            boat.friction    = 0.82f;
+            boat.useGravity  = true;
+            boat.color       = Eigen::Vector3f(0.18f, 0.42f, 0.86f);
+
+            boat.meshVertices   = KenneyBoatSpeedA::MakePhysicsVertices();
+            boat.meshTriIndices = KenneyBoatSpeedA::MakeTriangleIndices();
+            boat.solidShellThickness = 0.018f;
+            boat.BuildLocalSdfGrid(48);
+
+            for (int ix = 0; ix < 6; ++ix) {
+                float const fx = (float(ix) / 5.0f) * 2.0f - 1.0f;
+                float const halfWidth = 0.030f + 0.065f * (1.0f - std::abs(fx));
+                for (int iz = 0; iz < 3; ++iz) {
+                    float const fz = float(iz - 1);
+                    RigidBuoyancySample sample;
+                    sample.localPosition = Eigen::Vector3f(0.185f * fx, -0.072f, halfWidth * fz);
+                    sample.volumeWeight  = 1.0f / 18.0f;
+                    sample.radius        = 0.030f;
+                    boat.buoyancySamples.push_back(sample);
+                }
+            }
+
+            AddBody(boat);
+            addLab1StyleTankBoundary();
+            break;
+        }
+        case RigidBodyPreset::SurfaceTensionBlob: {
+            addLab1StyleTankBoundary();
+            break;
+        }
         case RigidBodyPreset::FluidCouplingMixed:
         default: {
             RigidBody box;

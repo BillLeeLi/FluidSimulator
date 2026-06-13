@@ -1183,6 +1183,124 @@ namespace VCX::MainScene {
         }
     }
 
+    void FluidSimulator::FinalizeManualParticleSetup(std::vector<glm::vec3> positions, glm::vec3 initialVelocity) {
+        m_iNumSpheres = static_cast<int>(positions.size());
+
+        m_particlePos = std::move(positions);
+        m_particleVel.assign(m_iNumSpheres, initialVelocity);
+        m_particleColor.assign(m_iNumSpheres, glm::vec3(1.0f));
+        m_hashtable.assign(m_iNumSpheres, 0);
+        m_particleSlot.assign(m_iNumSpheres, glm::ivec3(0));
+        m_hashtableindex.assign(m_iNumCells + 1, 0);
+
+        std::fill(m_vel.begin(), m_vel.end(), glm::vec3(0.0f));
+        std::fill(m_pre_vel.begin(), m_pre_vel.end(), glm::vec3(0.0f));
+        ResetSolidBoundaryVelocity();
+        for (int dir = 0; dir < 3; ++dir) {
+            std::fill(m_near_num[dir].begin(), m_near_num[dir].end(), 0.0f);
+        }
+        std::fill(m_p.begin(), m_p.end(), 0.0f);
+        std::fill(m_particleDensity.begin(), m_particleDensity.end(), 0.0f);
+
+        ResetSolidMaskToTank();
+        m_particleRestDensity = 1.0f;
+
+        if (enableSurfaceModeling) {
+            ClearSurfaceFields();
+            EnsureSurfaceFields();
+        }
+        m_renderSurfaceFrameCounter = 0;
+
+        buildHash();
+        for (int cell = 0; cell < m_iNumCells; ++cell) {
+            if (m_s[cell] <= 0.0f) {
+                m_type[cell] = SOLID_CELL;
+            } else {
+                int const cnt = m_hashtableindex[cell + 1] - m_hashtableindex[cell];
+                m_type[cell]  = (cnt > 0) ? FLUID_CELL : EMPTY_CELL;
+            }
+        }
+    }
+
+    void FluidSimulator::ResetParticlesToBoxRegion(glm::vec3 minCorner, glm::vec3 maxCorner, glm::vec3 initialVelocity) {
+        minCorner = glm::min(minCorner, maxCorner);
+        maxCorner = glm::max(minCorner, maxCorner);
+
+        float const point_r = m_particleRadius;
+        float const dx      = 2.0f * point_r;
+        float const dy      = std::sqrt(3.0f) * 0.5f * dx;
+        float const dz      = dx;
+
+        float const startX = -0.5f + m_h + point_r;
+        float const startY = -0.5f + m_h + point_r;
+        float const startZ = -0.5f + m_h + point_r;
+        float const endX   =  0.5f - m_h - point_r;
+        float const endY   =  0.5f - m_h - point_r;
+        float const endZ   =  0.5f - m_h - point_r;
+
+        std::vector<glm::vec3> positions;
+        for (int j = 0;; ++j) {
+            float const y = startY + dy * float(j);
+            if (y > endY + 1e-6f) break;
+
+            float const offset = (j % 2 == 0) ? 0.0f : point_r;
+            for (int i = 0;; ++i) {
+                float const x = startX + dx * float(i) + offset;
+                if (x > endX + 1e-6f) break;
+                for (int k = 0;; ++k) {
+                    float const z = startZ + dz * float(k) + offset;
+                    if (z > endZ + 1e-6f) break;
+
+                    glm::vec3 const p(x, y, z);
+                    if (p.x < minCorner.x || p.x > maxCorner.x) continue;
+                    if (p.y < minCorner.y || p.y > maxCorner.y) continue;
+                    if (p.z < minCorner.z || p.z > maxCorner.z) continue;
+                    positions.push_back(p);
+                }
+            }
+        }
+
+        FinalizeManualParticleSetup(std::move(positions), initialVelocity);
+    }
+
+    void FluidSimulator::ResetParticlesToSphereRegion(glm::vec3 center, float radius, glm::vec3 initialVelocity) {
+        float const point_r = m_particleRadius;
+        float const dx      = 2.0f * point_r;
+        float const dy      = std::sqrt(3.0f) * 0.5f * dx;
+        float const dz      = dx;
+
+        float const startX = std::max(-0.5f + m_h + point_r, center.x - radius);
+        float const startY = std::max(-0.5f + m_h + point_r, center.y - radius);
+        float const startZ = std::max(-0.5f + m_h + point_r, center.z - radius);
+        float const endX   = std::min( 0.5f - m_h - point_r, center.x + radius);
+        float const endY   = std::min( 0.5f - m_h - point_r, center.y + radius);
+        float const endZ   = std::min( 0.5f - m_h - point_r, center.z + radius);
+
+        std::vector<glm::vec3> positions;
+        for (int j = 0;; ++j) {
+            float const y = startY + dy * float(j);
+            if (y > endY + 1e-6f) break;
+
+            float const offset = (j % 2 == 0) ? 0.0f : point_r;
+            for (int i = 0;; ++i) {
+                float const x = startX + dx * float(i) + offset;
+                if (x > endX + 1e-6f) break;
+                for (int k = 0;; ++k) {
+                    float const z = startZ + dz * float(k) + offset;
+                    if (z > endZ + 1e-6f) break;
+
+                    glm::vec3 const p(x, y, z);
+                    glm::vec3 const d = p - center;
+                    if (glm::dot(d, d) <= radius * radius) {
+                        positions.push_back(p);
+                    }
+                }
+            }
+        }
+
+        FinalizeManualParticleSetup(std::move(positions), initialVelocity);
+    }
+
     int FluidSimulator::GridIndex(glm::ivec3 idx) const {
         return index2GridOffset(idx);
     }
@@ -1911,14 +2029,24 @@ namespace VCX::MainScene {
             return (len > 1e-6f) ? n / len : glm::vec3(0.0f, 1.0f, 0.0f);
         };
 
-        auto emitTriangle = [&](glm::vec3 const & a, glm::vec3 const & b, glm::vec3 const & c) {
+        auto emitTriangle = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+            glm::vec3 normalA = normalAt(a);
+            glm::vec3 normalB = normalAt(b);
+            glm::vec3 normalC = normalAt(c);
+            glm::vec3 const faceNormal = glm::cross(b - a, c - a);
+            glm::vec3 const averageNormal = normalA + normalB + normalC;
+            if (glm::dot(faceNormal, averageNormal) < 0.0f) {
+                std::swap(b, c);
+                std::swap(normalB, normalC);
+            }
+
             std::uint32_t const base = static_cast<std::uint32_t>(m_renderSurfaceMesh.positions.size());
             m_renderSurfaceMesh.positions.push_back(a);
             m_renderSurfaceMesh.positions.push_back(b);
             m_renderSurfaceMesh.positions.push_back(c);
-            m_renderSurfaceMesh.normals.push_back(normalAt(a));
-            m_renderSurfaceMesh.normals.push_back(normalAt(b));
-            m_renderSurfaceMesh.normals.push_back(normalAt(c));
+            m_renderSurfaceMesh.normals.push_back(normalA);
+            m_renderSurfaceMesh.normals.push_back(normalB);
+            m_renderSurfaceMesh.normals.push_back(normalC);
             m_renderSurfaceMesh.indices.push_back(base);
             m_renderSurfaceMesh.indices.push_back(base + 1);
             m_renderSurfaceMesh.indices.push_back(base + 2);

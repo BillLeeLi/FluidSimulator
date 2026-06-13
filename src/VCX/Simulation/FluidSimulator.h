@@ -190,6 +190,11 @@ namespace VCX::MainScene {
         // 场景初始化
         void setupScene(int res);
 
+        // 在已分配好的网格上，按 HCP 布局重新生成指定形状的初始粒子。
+        void ResetParticlesToBoxRegion(glm::vec3 minCorner, glm::vec3 maxCorner, glm::vec3 initialVelocity = glm::vec3(0.0f));
+        void ResetParticlesToSphereRegion(glm::vec3 center, float radius, glm::vec3 initialVelocity = glm::vec3(0.0f));
+        void FinalizeManualParticleSetup(std::vector<glm::vec3> positions, glm::vec3 initialVelocity = glm::vec3(0.0f));
+
         // 将3D网格索引->线性数组偏移
         int GridIndex(glm::ivec3 idx) const;
 

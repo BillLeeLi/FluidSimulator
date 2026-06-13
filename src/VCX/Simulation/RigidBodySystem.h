@@ -28,7 +28,9 @@ namespace VCX::MainScene {
         FluidCouplingMixed = 0,
         BoxCollision       = 1,
         MixedStack         = 2,
-        BoatInWater       = 3,
+        BoatInWater        = 3,
+        BoatDropIntoPool   = 4,
+        SurfaceTensionBlob = 5,
     };
 
     struct RigidBuoyancySample {

@@ -186,11 +186,13 @@ namespace {
         int const rings = 16;
         int const segs  = 32;
         float const r   = 0.5f * body.dim.x();
-        pos.reserve((rings + 1) * (segs + 1));
-        for (int y = 0; y <= rings; ++y) {
+        pos.reserve(2 + (rings - 1) * segs);
+
+        pos.push_back(ToGlm(body.LocalToWorld(Eigen::Vector3f(0.0f, r, 0.0f))));
+        for (int y = 1; y < rings; ++y) {
             float const v     = float(y) / float(rings);
             float const theta = 3.14159265358979323846f * v;
-            for (int x = 0; x <= segs; ++x) {
+            for (int x = 0; x < segs; ++x) {
                 float const u   = float(x) / float(segs);
                 float const phi = 2.0f * 3.14159265358979323846f * u;
                 Eigen::Vector3f local(
@@ -200,12 +202,29 @@ namespace {
                 pos.push_back(ToGlm(body.LocalToWorld(local)));
             }
         }
-        auto vid = [&](int y, int x) { return std::uint32_t(y * (segs + 1) + x); };
-        for (int y = 0; y < rings; ++y) {
+        std::uint32_t const southPole = static_cast<std::uint32_t>(pos.size());
+        pos.push_back(ToGlm(body.LocalToWorld(Eigen::Vector3f(0.0f, -r, 0.0f))));
+
+        auto ringVertex = [&](int ring, int segment) {
+            return std::uint32_t(1 + (ring - 1) * segs + (segment % segs));
+        };
+
+        for (int x = 0; x < segs; ++x) {
+            int const next = (x + 1) % segs;
+            AddTri(idx, 0, ringVertex(1, next), ringVertex(1, x));
+        }
+
+        for (int y = 1; y < rings - 1; ++y) {
             for (int x = 0; x < segs; ++x) {
-                AddTri(idx, vid(y, x), vid(y + 1, x), vid(y + 1, x + 1));
-                AddTri(idx, vid(y, x), vid(y + 1, x + 1), vid(y, x + 1));
+                int const next = (x + 1) % segs;
+                AddTri(idx, ringVertex(y, x), ringVertex(y + 1, next), ringVertex(y + 1, x));
+                AddTri(idx, ringVertex(y, x), ringVertex(y, next), ringVertex(y + 1, next));
             }
+        }
+
+        for (int x = 0; x < segs; ++x) {
+            int const next = (x + 1) % segs;
+            AddTri(idx, southPole, ringVertex(rings - 1, x), ringVertex(rings - 1, next));
         }
     }
 
@@ -249,6 +268,8 @@ namespace {
         if (s == "1" || s == "box") return RigidBodyPreset::BoxCollision;
         if (s == "2" || s == "stack") return RigidBodyPreset::MixedStack;
         if (s == "3" || s == "boat" || s == "boatinwater") return RigidBodyPreset::BoatInWater;
+        if (s == "4" || s == "boatdrop" || s == "boatdroppool" || s == "boatfall") return RigidBodyPreset::BoatDropIntoPool;
+        if (s == "5" || s == "blob" || s == "surfaceblob" || s == "tension" || s == "surfacetensionblob") return RigidBodyPreset::SurfaceTensionBlob;
         return RigidBodyPreset::BoatInWater;
     }
 
@@ -258,7 +279,7 @@ namespace {
                   << "  --frames N                 Number of frames, default 181\n"
                   << "  --fps N                    Playback FPS, default 30\n"
                   << "  --res N                    Fluid resolution, default 20\n"
-                  << "  --preset boat|mixed|box|stack|0..3, default boat\n"
+                  << "  --preset boat|mixed|box|stack|boatdrop|blob|0..5, default boat\n"
                   << "  --step-substeps N          Simulation steps per exported frame, default 2\n"
                   << "  --dt SECONDS               Physical time per exported frame. Default 1/fps\n"
                   << "  --surface-method sdf|density  Offline surface reconstruction, default sdf\n"

@@ -5,6 +5,31 @@
 
 namespace VCX::MainScene {
 
+    void SimulationWorld::ApplyPresetSceneDefaults(bool oldFluidGravity, bool oldSurfaceModeling) {
+        _fluid.enableGravity = oldFluidGravity;
+        _fluid.SetSurfaceModelingEnabled(oldSurfaceModeling);
+
+        switch (_rigidBodyPreset) {
+        case RigidBodyPreset::BoatDropIntoPool: {
+            _fluid.enableGravity = true;
+            _fluid.ResetParticlesToBoxRegion(
+                glm::vec3(-0.5f, -0.47f, -0.5f),
+                glm::vec3( 0.5f, -0.20f,  0.5f),
+                glm::vec3(0.0f));
+            break;
+        }
+        case RigidBodyPreset::SurfaceTensionBlob: {
+            _fluid.enableGravity = false;
+            _fluid.SetSurfaceModelingEnabled(true);
+            _fluid.m_surfaceTension = 0.02f;
+            _fluid.ResetParticlesToSphereRegion(glm::vec3(0.0f, 0.0f, 0.0f), 0.18f, glm::vec3(0.0f));
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
     std::vector<SimulationWorld::RigidBodyResetFlag> SimulationWorld::CaptureRigidBodyResetFlags() const {
         std::vector<RigidBodyResetFlag> flags;
         flags.reserve(_rigidBodies.Bodies.size());
@@ -42,6 +67,7 @@ namespace VCX::MainScene {
 
         _rigidBodies.SetupDefaultScene(_rigidBodyPreset);
         RestoreRigidBodyResetFlags(oldFlags);
+        ApplyPresetSceneDefaults(oldFluidGravity, oldSurfaceModeling);
 
         _timeAccumulator = 0.0f;
         _lastSimTimeMs   = 0.0f;
