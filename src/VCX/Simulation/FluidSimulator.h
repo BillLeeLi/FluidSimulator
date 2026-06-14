@@ -175,6 +175,7 @@ namespace VCX::MainScene {
         void ComputeSolidCellFractions();
         void ComputeFaceOpenFractions();
         void ComputeSimulationFractions();
+        void PromoteBoundaryLiquidCellsToFluid();
         float FaceOpenFraction(glm::ivec3 face, int dir) const;
 
         void updateRenderableSurface();
@@ -245,6 +246,7 @@ namespace VCX::MainScene {
         // 网格外视为固体
         bool IsCellSolid(glm::ivec3 idx) const;
         bool IsNearSolidBoundary(glm::ivec3 idx) const;
+        bool IsBoundaryLiquidCell(glm::ivec3 idx) const;
         bool IsFaceCutBySolidNormal(glm::ivec3 face, int dir) const;
 
         // 从压力网格`m_p`三线性插值采样流体速度

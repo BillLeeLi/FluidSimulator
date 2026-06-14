@@ -156,13 +156,28 @@ namespace VCX::MainScene {
                                 int j = m_hashtable[idx];
                                 if (i >= j) continue; // 每对只处理一次
 
-                                glm::vec3 dir = m_particlePos[i] - m_particlePos[j];
-                                float     len = glm::length(dir);
-                                if (len < minDist && len > 1e-8f) {
-                                    glm::vec3 corr = 0.5f * (minDist - len) * dir / len;
-                                    m_particlePos[i] += corr;
-                                    m_particlePos[j] -= corr;
+                                glm::vec3 delta = m_particlePos[i] - m_particlePos[j];
+                                float     dist  = glm::length(delta);
+                                if (dist >= minDist) continue;
+
+                                glm::vec3 normal(0.0f);
+                                if (dist > 1e-8f) {
+                                    normal = delta / dist;
+                                } else {
+                                    // 完全重合时没有可用法向；给粒子对一个稳定的退化分离方向，
+                                    // 避免角落/边界投影后位置完全相同时再也推不开。
+                                    unsigned const key = unsigned(i) * 73856093u
+                                        ^ unsigned(j) * 19349663u
+                                        ^ unsigned(iter) * 83492791u;
+                                    normal = glm::normalize(glm::vec3(
+                                        (key & 1u) ? 1.0f : -1.0f,
+                                        (key & 2u) ? 1.0f : -1.0f,
+                                        (key & 4u) ? 1.0f : -1.0f));
                                 }
+
+                                glm::vec3 const corr = 0.5f * (minDist - dist) * normal;
+                                m_particlePos[i] += corr;
+                                m_particlePos[j] -= corr;
                             }
                         }
                     }
@@ -771,7 +786,11 @@ namespace VCX::MainScene {
         EnsureSimulationSDFFields();
         if (! m_phiSolid.IsValid()) return;
 
-        BuildSolidSDFFromRigidBodies(rigid, m_phiSolid, m_solidSdfMaxDistance, true);
+        // 水槽静态墙已经由 m_s / IsCellSolid / SolidBoundaryVelocity 这一套
+        // 规则网格边界条件稳定处理；再把它们重复塞进 SDF cut-cell 会让
+        // 贴墙第一层和角落处同时吃到两套几何离散，容易出现“贴墙先掉”。
+        // 这里把仿真 SDF 只留给真正的刚体几何（船体/箱体/球等）。
+        BuildSolidSDFFromRigidBodies(rigid, m_phiSolid, m_solidSdfMaxDistance, false);
     }
 
     void FluidSimulator::BuildSimulationSDFFields(RigidBodySystem const & rigid) {
@@ -779,6 +798,7 @@ namespace VCX::MainScene {
         BuildFluidSimulationSDF();
         BuildSolidSimulationSDF(rigid);
         ComputeSimulationFractions();
+        PromoteBoundaryLiquidCellsToFluid();
     }
 
     void FluidSimulator::EnsureSimulationFractionFields() {
@@ -889,6 +909,24 @@ namespace VCX::MainScene {
         ComputeLiquidCellFractions();
         ComputeSolidCellFractions();
         ComputeFaceOpenFractions();
+    }
+
+    void FluidSimulator::PromoteBoundaryLiquidCellsToFluid() {
+        if (m_type.size() != std::size_t(m_iNumCells)) return;
+
+        for (int i = 0; i < m_iCellX; ++i) {
+            for (int j = 0; j < m_iCellY; ++j) {
+                for (int k = 0; k < m_iCellZ; ++k) {
+                    glm::ivec3 const cell(i, j, k);
+                    int const        id = index2GridOffset(cell);
+                    if (m_type[id] == SOLID_CELL || IsCellSolid(cell)) continue;
+                    if (m_type[id] == FLUID_CELL) continue;
+                    if (IsBoundaryLiquidCell(cell)) {
+                        m_type[id] = FLUID_CELL;
+                    }
+                }
+            }
+        }
     }
 
     float FluidSimulator::FaceOpenFraction(glm::ivec3 face, int dir) const {
@@ -1447,24 +1485,15 @@ namespace VCX::MainScene {
 
         if (m_solidCellFraction.size() == std::size_t(m_iNumCells)) {
             int const id = index2GridOffset(idx);
-            if (id >= 0 && id < static_cast<int>(m_solidCellFraction.size()) && m_solidCellFraction[id] > 1e-4f) {
-                return true;
+            if (id >= 0 && id < static_cast<int>(m_solidCellFraction.size())) {
+                float const solidFraction = m_solidCellFraction[id];
+                if (solidFraction > 1e-4f && solidFraction < 1.0f - 1e-4f) {
+                    return true;
+                }
             }
         }
 
-        static constexpr glm::ivec3 offsets[6] {
-            glm::ivec3(-1, 0, 0),
-            glm::ivec3(1, 0, 0),
-            glm::ivec3(0, -1, 0),
-            glm::ivec3(0, 1, 0),
-            glm::ivec3(0, 0, -1),
-            glm::ivec3(0, 0, 1),
-        };
-        for (glm::ivec3 const & offset : offsets) {
-            glm::ivec3 const neighbor = idx + offset;
-            if (! IsInsideGrid(neighbor) || IsCellSolid(neighbor)) return true;
-        }
-
+        // 对斜切/局部 SDF 边界，partial open face 仍然视作 cut-cell。
         if (m_faceOpenFraction.size() == std::size_t(m_iNumCells)) {
             for (int dir = 0; dir < 3; ++dir) {
                 glm::ivec3 axis(0);
@@ -1472,16 +1501,30 @@ namespace VCX::MainScene {
                 glm::ivec3 const lowerFace = idx;
                 glm::ivec3 const upperFace = idx + axis;
 
-                if (IsVelocityFaceInRange(lowerFace, dir) && FaceOpenFraction(lowerFace, dir) < 1.0f - 1e-4f) {
-                    return true;
+                if (IsVelocityFaceInRange(lowerFace, dir)) {
+                    float const open = FaceOpenFraction(lowerFace, dir);
+                    if (open > 1e-4f && open < 1.0f - 1e-4f) return true;
                 }
-                if (IsVelocityFaceInRange(upperFace, dir) && FaceOpenFraction(upperFace, dir) < 1.0f - 1e-4f) {
-                    return true;
+                if (IsVelocityFaceInRange(upperFace, dir)) {
+                    float const open = FaceOpenFraction(upperFace, dir);
+                    if (open > 1e-4f && open < 1.0f - 1e-4f) return true;
                 }
             }
         }
 
         return false;
+    }
+
+    bool FluidSimulator::IsBoundaryLiquidCell(glm::ivec3 idx) const {
+        if (! IsInsideGrid(idx) || IsCellSolid(idx)) return false;
+        if (m_liquidCellFraction.size() != std::size_t(m_iNumCells)) return false;
+
+        int const id = index2GridOffset(idx);
+        if (id < 0 || id >= static_cast<int>(m_liquidCellFraction.size())) return false;
+
+        float const liquidFraction = m_liquidCellFraction[id];
+        if (liquidFraction < 0.125f) return false;
+        return IsNearSolidBoundary(idx);
     }
 
     bool FluidSimulator::IsFaceCutBySolidNormal(glm::ivec3 face, int dir) const {
@@ -1517,7 +1560,6 @@ namespace VCX::MainScene {
 
         if (m_type.empty()) return result;
 
-        bool const hasLiquidFraction = m_liquidCellFraction.size() == std::size_t(m_iNumCells);
         bool const hasSolidFraction  = m_solidCellFraction.size() == std::size_t(m_iNumCells);
 
         for (int i = 0; i < m_iCellX; ++i) {
@@ -1525,13 +1567,9 @@ namespace VCX::MainScene {
                 for (int k = 0; k < m_iCellZ; ++k) {
                     glm::ivec3 const cell(i, j, k);
                     int const        id = index2GridOffset(cell);
-                    float const liquidFraction = hasLiquidFraction ? m_liquidCellFraction[id] : 0.0f;
                     float const solidFraction  = hasSolidFraction ? m_solidCellFraction[id] : 0.0f;
 
-                    bool const boundaryCutCell = hasLiquidFraction
-                        && liquidFraction >= 0.125f
-                        && IsNearSolidBoundary(cell);
-                    bool const hasLiquid      = m_type[id] == FLUID_CELL || boundaryCutCell;
+                    bool const hasLiquid      = m_type[id] == FLUID_CELL || IsBoundaryLiquidCell(cell);
                     bool const nearlySolid = m_type[id] == SOLID_CELL || IsCellSolid(cell);
                     bool const fullSolidBySdf = hasSolidFraction && solidFraction >= 1.0f - 1e-4f;
                     if (! hasLiquid || nearlySolid || fullSolidBySdf) continue;
