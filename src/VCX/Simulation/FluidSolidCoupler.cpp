@@ -163,17 +163,22 @@ namespace VCX::MainScene {
             if (lowerDof < 0 && upperDof < 0) return;  // 如果面相邻的两个cell都不是流体,不需要处理
 
             float const openFraction = faceOpenFraction(face, dir);
+            float const blockedFraction = faceBlockedFraction(face, dir);
 
             bool const lowerSolid = isSolidCell(lowerCell);
             bool const upperSolid = isSolidCell(upperCell);
+            bool const solidNormalCut = fluid.IsFaceCutBySolidNormal(face, dir);
+            if (! lowerSolid && ! upperSolid && solidNormalCut && blockedFraction > 1e-4f) {
+                float const blockedArea   = area * blockedFraction;
+                float const solidVelocity = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                if (lowerDof >= 0) rhs[lowerDof] += blockedArea * solidVelocity;
+                if (upperDof >= 0) rhs[upperDof] -= blockedArea * solidVelocity;
+            }
             if (lowerSolid || upperSolid) {  // 至少存在一个固体邻居，即流固界面
-                float const blockedFraction = faceBlockedFraction(face, dir);
-                if (blockedFraction <= 1e-4f) return;
-
-                int const   fluidDof = lowerDof >= 0 ? lowerDof : upperDof;
-                float const blockedArea = area * blockedFraction;
-                float const coeff    = lowerDof >= 0 ? blockedArea : -blockedArea;
-                rhs[fluidDof] += coeff * fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                float const blockedArea   = area * blockedFraction;
+                float const solidVelocity = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                if (lowerDof >= 0) rhs[lowerDof] += blockedArea * solidVelocity;
+                if (upperDof >= 0) rhs[upperDof] -= blockedArea * solidVelocity;
                 return;  // 流固界面速度使用固体速度，不作为可以由压力任意调整的流体face DOF,所以不加入矩阵项
             }
 
@@ -378,9 +383,11 @@ namespace VCX::MainScene {
 
                         // 更新速度时固液界面上不使用压力更新，直接使用固体的边界速度
                         float const openFraction = faceOpenFraction(face, dir);
+                        float const blockedFraction = faceBlockedFraction(face, dir);
 
                         bool const lowerSolid = isSolidCell(lowerCell);
                         bool const upperSolid = isSolidCell(upperCell);
+                        bool const solidNormalCut = fluid.IsFaceCutBySolidNormal(face, dir);
                         if (lowerSolid || upperSolid) {
                             int const faceId = fluid.GridIndex(face);
                             // 回代时动态刚体界面 face 不再写 SolidBoundaryVelocity() 的旧值/零值；静态墙面仍写 0。
@@ -394,7 +401,15 @@ namespace VCX::MainScene {
                             continue;
                         }
 
-                        if (openFraction <= 1e-4f) continue;
+                        if (openFraction <= 1e-4f) {
+                            if (solidNormalCut && blockedFraction > 1e-4f) {
+                                int const faceId = fluid.GridIndex(face);
+                                if (faceId >= 0 && faceId < static_cast<int>(fluid.m_vel.size())) {
+                                    fluid.m_vel[faceId][dir] = fluid.SolidBoundaryVelocity(face.x, face.y, face.z, dir);
+                                }
+                            }
+                            continue;
+                        }
 
                         float const lambdaLower = lowerDof >= 0 ? lambda[lowerDof] : 0.0f;
                         float const lambdaUpper = upperDof >= 0 ? lambda[upperDof] : 0.0f;

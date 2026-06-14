@@ -1442,6 +1442,72 @@ namespace VCX::MainScene {
         return velocities[id][dir];
     }
 
+    bool FluidSimulator::IsNearSolidBoundary(glm::ivec3 idx) const {
+        if (! IsInsideGrid(idx) || IsCellSolid(idx)) return false;
+
+        if (m_solidCellFraction.size() == std::size_t(m_iNumCells)) {
+            int const id = index2GridOffset(idx);
+            if (id >= 0 && id < static_cast<int>(m_solidCellFraction.size()) && m_solidCellFraction[id] > 1e-4f) {
+                return true;
+            }
+        }
+
+        static constexpr glm::ivec3 offsets[6] {
+            glm::ivec3(-1, 0, 0),
+            glm::ivec3(1, 0, 0),
+            glm::ivec3(0, -1, 0),
+            glm::ivec3(0, 1, 0),
+            glm::ivec3(0, 0, -1),
+            glm::ivec3(0, 0, 1),
+        };
+        for (glm::ivec3 const & offset : offsets) {
+            glm::ivec3 const neighbor = idx + offset;
+            if (! IsInsideGrid(neighbor) || IsCellSolid(neighbor)) return true;
+        }
+
+        if (m_faceOpenFraction.size() == std::size_t(m_iNumCells)) {
+            for (int dir = 0; dir < 3; ++dir) {
+                glm::ivec3 axis(0);
+                axis[dir]                  = 1;
+                glm::ivec3 const lowerFace = idx;
+                glm::ivec3 const upperFace = idx + axis;
+
+                if (IsVelocityFaceInRange(lowerFace, dir) && FaceOpenFraction(lowerFace, dir) < 1.0f - 1e-4f) {
+                    return true;
+                }
+                if (IsVelocityFaceInRange(upperFace, dir) && FaceOpenFraction(upperFace, dir) < 1.0f - 1e-4f) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool FluidSimulator::IsFaceCutBySolidNormal(glm::ivec3 face, int dir) const {
+        if (dir < 0 || dir >= 3 || ! IsVelocityFaceInRange(face, dir) || ! m_phiSolid.IsValid()) {
+            return false;
+        }
+
+        glm::vec3 const center = FaceCenter(face, dir);
+        glm::vec3 const axis   = FaceAxis(dir);
+        float const     offset = 0.5f * m_h;
+        float const     phi0   = SampleSDF(m_phiSolid, center - offset * axis);
+        float const     phi1   = SampleSDF(m_phiSolid, center + offset * axis);
+
+        if (phi0 <= 0.0f && phi1 >= 0.0f) return true;
+        if (phi1 <= 0.0f && phi0 >= 0.0f) return true;
+
+        glm::vec3 const grad = GradSDF(m_phiSolid, center);
+        float const     len  = glm::length(grad);
+        if (len <= 1e-5f) return false;
+
+        float const normalAlignment = std::abs(glm::dot(grad / len, axis));
+        float const nearBand        = 0.25f * m_h;
+        bool const  nearSurface     = std::min(std::abs(phi0), std::abs(phi1)) <= nearBand;
+        return nearSurface && normalAlignment >= 0.5f;
+    }
+
     FluidPressureDofs FluidSimulator::BuildPressureDofs() const {
         // Ax=b 的未知量个数不是总 cell 数。
         // 旧逻辑只给“粒子落入的 FLUID_CELL”建 dof；接入 SDF 后，液体体积分数>0的 cut-cell 也可成为压力未知量。
@@ -1462,7 +1528,10 @@ namespace VCX::MainScene {
                     float const liquidFraction = hasLiquidFraction ? m_liquidCellFraction[id] : 0.0f;
                     float const solidFraction  = hasSolidFraction ? m_solidCellFraction[id] : 0.0f;
 
-                    bool const hasLiquid = m_type[id] == FLUID_CELL || liquidFraction > 1e-4f;
+                    bool const boundaryCutCell = hasLiquidFraction
+                        && liquidFraction >= 0.125f
+                        && IsNearSolidBoundary(cell);
+                    bool const hasLiquid      = m_type[id] == FLUID_CELL || boundaryCutCell;
                     bool const nearlySolid = m_type[id] == SOLID_CELL || IsCellSolid(cell);
                     bool const fullSolidBySdf = hasSolidFraction && solidFraction >= 1.0f - 1e-4f;
                     if (! hasLiquid || nearlySolid || fullSolidBySdf) continue;

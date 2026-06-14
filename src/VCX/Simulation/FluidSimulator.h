@@ -244,6 +244,8 @@ namespace VCX::MainScene {
         // 查看Cell类型，用于调试和边界判断
         // 网格外视为固体
         bool IsCellSolid(glm::ivec3 idx) const;
+        bool IsNearSolidBoundary(glm::ivec3 idx) const;
+        bool IsFaceCutBySolidNormal(glm::ivec3 face, int dir) const;
 
         // 从压力网格`m_p`三线性插值采样流体速度
         float SamplePressure(glm::vec3 const & p) const;
